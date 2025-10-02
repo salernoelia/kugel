@@ -1,7 +1,9 @@
-use eframe::egui;
-
 mod canvas;
-use canvas::{Canvas, Tool};
+mod shapes;
+
+use canvas::Canvas;
+use eframe::egui;
+use shapes::Tool;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
@@ -10,7 +12,7 @@ fn main() -> eframe::Result<()> {
     };
 
     eframe::run_native(
-        "skia in rust shizl",
+        "Drawmi",
         options,
         Box::new(|_cc| Ok(Box::new(VectorEditorApp::default()))),
     )
@@ -24,6 +26,7 @@ struct VectorEditorApp {
     zoom: f32,
     pan_offset: egui::Vec2,
     use_grid: bool,
+    background_color: egui::Color32,
 }
 
 impl Default for VectorEditorApp {
@@ -36,6 +39,7 @@ impl Default for VectorEditorApp {
             zoom: 1.0,
             pan_offset: egui::Vec2::ZERO,
             use_grid: false,
+            background_color: egui::Color32::from_gray(240),
         }
     }
 }
@@ -101,6 +105,13 @@ impl eframe::App for VectorEditorApp {
                     egui::color_picker::Alpha::Opaque,
                 );
 
+                ui.label("Background color Color:");
+                egui::color_picker::color_edit_button_srgba(
+                    ui,
+                    &mut self.background_color,
+                    egui::color_picker::Alpha::Opaque,
+                );
+
                 ui.add(egui::Slider::new(&mut self.stroke_width, 1.0..=20.0).text("Width"));
 
                 ui.separator();
@@ -137,10 +148,9 @@ impl eframe::App for VectorEditorApp {
             let (response, mut painter) =
                 ui.allocate_painter(ui.available_size(), egui::Sense::click_and_drag());
 
-            painter.rect_filled(response.rect, 0.0, egui::Color32::from_gray(240));
+            painter.rect_filled(response.rect, 0.0, self.background_color);
 
             if self.use_grid == true {
-                // Draw grid for infinite canvas feel
                 let grid_spacing = 50.0 * self.zoom;
                 let grid_color = egui::Color32::from_gray(220);
 
@@ -174,18 +184,15 @@ impl eframe::App for VectorEditorApp {
                 }
             }
 
-            // Handle zoom with scroll or pinch gesture
             let scroll_delta = ui.input(|i| i.smooth_scroll_delta);
             let zoom_delta = ui.input(|i| i.zoom_delta());
 
             if zoom_delta != 1.0 || scroll_delta.y != 0.0 {
                 let pointer_pos = response.hover_pos().unwrap_or(response.rect.center());
 
-                // Calculate zoom factor
                 let zoom_factor = if zoom_delta != 1.0 {
                     zoom_delta
                 } else {
-                    // Use Ctrl/Cmd + scroll for zoom
                     if ui.input(|i| i.modifiers.command || i.modifiers.ctrl) {
                         1.0 + scroll_delta.y * 0.001
                     } else {
@@ -197,14 +204,12 @@ impl eframe::App for VectorEditorApp {
                     let old_zoom = self.zoom;
                     self.zoom = (self.zoom * zoom_factor).clamp(0.1, 10.0);
 
-                    // Adjust pan to zoom toward pointer position
                     let zoom_change = self.zoom / old_zoom;
                     self.pan_offset = pointer_pos.to_vec2()
                         + (self.pan_offset - pointer_pos.to_vec2()) * zoom_change;
                 }
             }
 
-            // Handle panning - middle mouse or space + drag
             let is_panning = ui.input(|i| {
                 i.pointer.middle_down()
                     || (i.key_down(egui::Key::Space) && i.pointer.primary_down())
@@ -213,7 +218,6 @@ impl eframe::App for VectorEditorApp {
             if is_panning && response.dragged() {
                 self.pan_offset += response.drag_delta();
             } else if !is_panning {
-                // Handle drawing - start shape on drag start
                 if response.drag_started() {
                     if let Some(pos) = response.interact_pointer_pos() {
                         let canvas_pos = self.screen_to_canvas(pos);
@@ -238,10 +242,8 @@ impl eframe::App for VectorEditorApp {
                 }
             }
 
-            // Set up transform for rendering
             painter.set_clip_rect(response.rect);
 
-            // Render all shapes with transform
             self.canvas.render(&painter, self.zoom, self.pan_offset);
         });
     }
