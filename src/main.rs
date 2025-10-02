@@ -94,6 +94,12 @@ impl eframe::App for VectorEditorApp {
                 {
                     self.tool = Tool::Select;
                 }
+                if ui
+                    .selectable_label(self.tool == Tool::Bezier, "➤ Bezier")
+                    .clicked()
+                {
+                    self.tool = Tool::Bezier;
+                }
 
                 ui.separator();
                 ui.heading("Properties");
@@ -218,27 +224,48 @@ impl eframe::App for VectorEditorApp {
             if is_panning && response.dragged() {
                 self.pan_offset += response.drag_delta();
             } else if !is_panning {
-                if response.drag_started() {
-                    if let Some(pos) = response.interact_pointer_pos() {
+                // Handle Bezier tool specially with clicks
+                if self.tool == Tool::Bezier {
+                    if let Some(pos) = response.hover_pos() {
                         let canvas_pos = self.screen_to_canvas(pos);
-                        self.canvas.start_shape(
-                            self.tool,
-                            canvas_pos,
-                            self.selected_color,
-                            self.stroke_width,
-                        );
+                        self.canvas.update_bezier_hover(canvas_pos);
                     }
-                }
 
-                if response.dragged() {
-                    if let Some(pos) = response.interact_pointer_pos() {
-                        let canvas_pos = self.screen_to_canvas(pos);
-                        self.canvas.update_current_shape(canvas_pos);
+                    if response.clicked() {
+                        if let Some(pos) = response.interact_pointer_pos() {
+                            let canvas_pos = self.screen_to_canvas(pos);
+                            self.canvas.start_shape(
+                                self.tool,
+                                canvas_pos,
+                                self.selected_color,
+                                self.stroke_width,
+                            );
+                        }
                     }
-                }
+                } else {
+                    // Handle other tools with drag
+                    if response.drag_started() {
+                        if let Some(pos) = response.interact_pointer_pos() {
+                            let canvas_pos = self.screen_to_canvas(pos);
+                            self.canvas.start_shape(
+                                self.tool,
+                                canvas_pos,
+                                self.selected_color,
+                                self.stroke_width,
+                            );
+                        }
+                    }
 
-                if response.drag_stopped() {
-                    self.canvas.finish_shape();
+                    if response.dragged() {
+                        if let Some(pos) = response.interact_pointer_pos() {
+                            let canvas_pos = self.screen_to_canvas(pos);
+                            self.canvas.update_current_shape(canvas_pos);
+                        }
+                    }
+
+                    if response.drag_stopped() {
+                        self.canvas.finish_shape();
+                    }
                 }
             }
 
