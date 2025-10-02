@@ -1,0 +1,12 @@
+[package]
+name = "egui-skia"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+egui = "0.32.3"
+eframe = { version = "0.32.3", default-features = true }
+skia-safe = { version = "0.88.0", features = ["gl", "textlayout"] }
+
+[profile.release]
+opt-level = 2
