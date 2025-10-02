@@ -1,5 +1,5 @@
 [package]
-name = "egui-skia"
+name = "kugel"
 version = "0.1.0"
 edition = "2021"
 
