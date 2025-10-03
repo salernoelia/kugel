@@ -14,11 +14,11 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Kugel",
         options,
-        Box::new(|_cc| Ok(Box::new(VectorEditorApp::default()))),
+        Box::new(|_cc| Ok(Box::new(App::default()))),
     )
 }
 
-struct VectorEditorApp {
+struct App {
     canvas: Canvas,
     tool: Tool,
     selected_color: egui::Color32,
@@ -29,7 +29,7 @@ struct VectorEditorApp {
     background_color: egui::Color32,
 }
 
-impl Default for VectorEditorApp {
+impl Default for App {
     fn default() -> Self {
         Self {
             canvas: Canvas::default(),
@@ -44,25 +44,16 @@ impl Default for VectorEditorApp {
     }
 }
 
-impl VectorEditorApp {
-    // Transform screen coordinates to canvas coordinates
+impl App {
     fn screen_to_canvas(&self, screen_pos: egui::Pos2) -> egui::Pos2 {
         egui::pos2(
             (screen_pos.x - self.pan_offset.x) / self.zoom,
             (screen_pos.y - self.pan_offset.y) / self.zoom,
         )
     }
-
-    // Transform canvas coordinates to screen coordinates
-    // fn canvas_to_screen(&self, canvas_pos: egui::Pos2) -> egui::Pos2 {
-    //     egui::pos2(
-    //         canvas_pos.x * self.zoom + self.pan_offset.x,
-    //         canvas_pos.y * self.zoom + self.pan_offset.y,
-    //     )
-    // }
 }
 
-impl eframe::App for VectorEditorApp {
+impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::SidePanel::left("tools_panel")
             .default_width(200.0)
@@ -125,6 +116,11 @@ impl eframe::App for VectorEditorApp {
                 ui.separator();
                 if ui.button("Clear Canvas").clicked() {
                     self.canvas.clear();
+                }
+
+                ui.separator();
+                if ui.button("Undo").clicked() {
+                    self.canvas.undo();
                 }
             });
 
@@ -214,6 +210,19 @@ impl eframe::App for VectorEditorApp {
                 i.pointer.middle_down()
                     || (i.key_down(egui::Key::Space) && i.pointer.primary_down())
             });
+
+            // undo
+            if ui
+                .input(|i| (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::Z))
+            {
+                self.canvas.undo();
+            }
+            // redo
+            if ui
+                .input(|i| (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::Y))
+            {
+                self.canvas.redo();
+            }
 
             if is_panning && response.dragged() {
                 self.pan_offset += response.drag_delta();

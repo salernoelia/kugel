@@ -6,6 +6,7 @@ pub enum Tool {
     Select,
 }
 
+#[derive(Clone)]
 pub struct Shape {
     tool: Tool,
     start: egui::Pos2,

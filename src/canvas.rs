@@ -4,6 +4,8 @@ use crate::shapes::Shape;
 pub struct Canvas {
     pub shapes: Vec<Shape>,
     current_shape: Option<Shape>,
+    pub history: Vec<Vec<Shape>>,
+    pub undo_history: Vec<Vec<Shape>>,
 }
 
 impl Canvas {
@@ -25,11 +27,13 @@ impl Canvas {
 
     pub fn finish_shape(&mut self) {
         if let Some(shape) = self.current_shape.take() {
+            self.history.push(self.shapes.clone()); // Save current state
             self.shapes.push(shape);
         }
     }
 
     pub fn clear(&mut self) {
+        self.history.push(self.shapes.clone()); // Save current state
         self.shapes.clear();
         self.current_shape = None;
     }
@@ -41,6 +45,20 @@ impl Canvas {
 
         if let Some(shape) = &self.current_shape {
             shape.render(painter, zoom, pan_offset);
+        }
+    }
+
+    pub fn undo(&mut self) {
+        if let Some(prev) = self.history.pop() {
+            self.undo_history.push(self.shapes.clone());
+            self.shapes = prev;
+        }
+    }
+
+    pub fn redo(&mut self) {
+        if let Some(next) = self.undo_history.pop() {
+            self.history.push(self.shapes.clone());
+            self.shapes = next;
         }
     }
 }
