@@ -169,7 +169,19 @@ impl Canvas {
     }
 
     pub fn render(&self, painter: &egui::Painter, zoom: f32, pan_offset: egui::Vec2, editing_index: Option<usize>) {
+        let clip = painter.clip_rect();
         for (idx, shape) in self.shapes.iter().enumerate() {
+            let bounds = shape.data.get_bounds();
+            if bounds.is_positive() {
+                let screen_bounds = egui::Rect::from_min_max(
+                    egui::pos2(bounds.min.x * zoom + pan_offset.x, bounds.min.y * zoom + pan_offset.y),
+                    egui::pos2(bounds.max.x * zoom + pan_offset.x, bounds.max.y * zoom + pan_offset.y),
+                )
+                .expand(64.0);
+                if !clip.intersects(screen_bounds) {
+                    continue;
+                }
+            }
             let is_editing = Some(idx) == editing_index;
             shape.data.render(painter, zoom, pan_offset, is_editing);
         }

@@ -163,7 +163,7 @@ fn draw_shape_to_skia(canvas: &skia_safe::Canvas, data: &ShapeData) -> Result<()
                 );
             }
         }
-        ShapeData::StickyNote { rect, text, bg_color, text_color, text_size } => {
+        ShapeData::StickyNote { rect, text, bg_color, text_color, text_size, .. } => {
             let sk_rect = skia_safe::Rect::new(rect.min.x, rect.min.y, rect.max.x, rect.max.y);
             
             let mut bg_paint = skia_safe::Paint::default();

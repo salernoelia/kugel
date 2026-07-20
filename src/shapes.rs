@@ -45,6 +45,8 @@ pub enum ShapeData {
         max_width: Option<f32>,
         #[serde(skip)]
         cached_size: Option<egui::Vec2>,
+        #[serde(skip)]
+        cache_key: Option<u64>,
     },
     Image {
         rect: egui::Rect,
@@ -61,6 +63,8 @@ pub enum ShapeData {
         text_size: f32,
         #[serde(skip)]
         cached_height: Option<f32>,
+        #[serde(skip)]
+        cache_key: Option<u64>,
     },
 }
 
@@ -111,6 +115,7 @@ impl Shape {
                 size,
                 max_width: None,
                 cached_size: None,
+                cache_key: None,
             },
         }
     }
@@ -136,6 +141,8 @@ impl Shape {
                 bg_color,
                 text_color,
                 text_size,
+                cached_height: None,
+                cache_key: None,
             },
         }
     }
@@ -462,7 +469,7 @@ impl ShapeData {
                     );
                 }
             }
-            ShapeData::StickyNote { rect, text, bg_color, text_color, text_size } => {
+            ShapeData::StickyNote { rect, text, bg_color, text_color, text_size, .. } => {
                 let start = transform(rect.min);
                 let end = transform(rect.max);
                 let transformed_rect = egui::Rect::from_two_pos(start, end);
