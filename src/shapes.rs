@@ -212,6 +212,45 @@ impl ShapeData {
         }
     }
 
+    pub fn scale_about(&mut self, pivot: egui::Pos2, factor: f32) {
+        let sp = |p: egui::Pos2| -> egui::Pos2 { pivot + (p - pivot) * factor };
+        match self {
+            ShapeData::Pen { points, .. } => {
+                for p in points {
+                    *p = sp(*p);
+                }
+            }
+            ShapeData::Rectangle { rect, .. } => {
+                *rect = egui::Rect::from_min_max(sp(rect.min), sp(rect.max));
+            }
+            ShapeData::Circle { center, radius, .. } => {
+                *center = sp(*center);
+                *radius *= factor;
+            }
+            ShapeData::Text {
+                pos,
+                size,
+                max_width,
+                ..
+            } => {
+                *pos = sp(*pos);
+                *size = (*size * factor).clamp(8.0, 200.0);
+                if let Some(mw) = max_width {
+                    *mw *= factor;
+                }
+            }
+            ShapeData::Image { rect, .. } => {
+                *rect = egui::Rect::from_min_max(sp(rect.min), sp(rect.max));
+            }
+            ShapeData::StickyNote {
+                rect, text_size, ..
+            } => {
+                *rect = egui::Rect::from_min_max(sp(rect.min), sp(rect.max));
+                *text_size = (*text_size * factor).clamp(8.0, 200.0);
+            }
+        }
+    }
+
     pub fn resize(&mut self, handle_index: usize, delta: egui::Vec2, mouse_pos: egui::Pos2) {
         let bounds = self.get_bounds();
         match self {

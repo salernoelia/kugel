@@ -373,6 +373,41 @@ impl App {
         }
         None
     }
+
+    /// Union bounds (canvas) of all selected shapes.
+    fn selection_bounds(&self) -> Option<egui::Rect> {
+        let mut acc: Option<egui::Rect> = None;
+        for &idx in &self.selected_shape_indices {
+            if idx < self.canvas.shapes.len() {
+                let b = self.canvas.shapes[idx].data.get_bounds();
+                if b.is_positive() {
+                    acc = Some(acc.map_or(b, |a| a.union(b)));
+                }
+            }
+        }
+        acc
+    }
+
+    /// Corner handle of the group selection box under the mouse (screen pos).
+    fn group_handle_under_mouse(&self, mouse_pos: egui::Pos2) -> Option<usize> {
+        let bounds = self.selection_bounds()?;
+        let screen_bounds = egui::Rect::from_min_max(
+            self.canvas_to_screen(bounds.min),
+            self.canvas_to_screen(bounds.max),
+        );
+        let handle_positions = [
+            screen_bounds.left_top(),
+            screen_bounds.right_top(),
+            screen_bounds.left_bottom(),
+            screen_bounds.right_bottom(),
+        ];
+        for (h_idx, &pos) in handle_positions.iter().enumerate() {
+            if mouse_pos.distance(pos) <= 8.0 {
+                return Some(h_idx);
+            }
+        }
+        None
+    }
 }
 
 impl eframe::App for App {
@@ -1039,7 +1074,15 @@ impl eframe::App for App {
                                 let click_canvas_pos = self.screen_to_canvas(click_pos);
                                 let mut clicked_handle = false;
 
-                                if let Some(selected_idx) = self.primary_selected {
+                                if self.selected_shape_indices.len() > 1 {
+                                    if let Some(handle_idx) =
+                                        self.group_handle_under_mouse(click_pos)
+                                    {
+                                        self.is_resizing = Some(handle_idx);
+                                        self.drag_start_pos = click_pos;
+                                        clicked_handle = true;
+                                    }
+                                } else if let Some(selected_idx) = self.primary_selected {
                                     if selected_idx < self.canvas.shapes.len() {
                                         if let Some(handle_idx) =
                                             self.get_handle_under_mouse(selected_idx, click_pos)
@@ -1110,7 +1153,37 @@ impl eframe::App for App {
                             if response.dragged() {
                                 let delta = response.drag_delta() / self.zoom;
                                 if let Some(handle_idx) = self.is_resizing {
-                                    if let Some(primary_idx) = self.primary_selected {
+                                    if self.selected_shape_indices.len() > 1 {
+                                        if let Some(bounds) = self.selection_bounds() {
+                                            let anchor = match handle_idx {
+                                                0 => bounds.right_bottom(),
+                                                1 => bounds.left_bottom(),
+                                                2 => bounds.right_top(),
+                                                _ => bounds.left_top(),
+                                            };
+                                            let corner = match handle_idx {
+                                                0 => bounds.left_top(),
+                                                1 => bounds.right_top(),
+                                                2 => bounds.left_bottom(),
+                                                _ => bounds.right_bottom(),
+                                            };
+                                            let old_dist = corner.distance(anchor);
+                                            let new_dist = canvas_pos.distance(anchor);
+                                            if old_dist > 1.0 {
+                                                let factor =
+                                                    (new_dist / old_dist).clamp(0.2, 5.0);
+                                                if (factor - 1.0).abs() > 0.0001 {
+                                                    for &idx in &self.selected_shape_indices {
+                                                        if idx < self.canvas.shapes.len() {
+                                                            self.canvas.shapes[idx]
+                                                                .data
+                                                                .scale_about(anchor, factor);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else if let Some(primary_idx) = self.primary_selected {
                                         if primary_idx < self.canvas.shapes.len() {
                                             self.canvas.shapes[primary_idx]
                                                 .data
@@ -1165,8 +1238,16 @@ impl eframe::App for App {
                                 );
                             }
 
-                            // Adjust cursor if hovering over handles (primary selection only)
-                            if let Some(selected_idx) = self.primary_selected {
+                            // Adjust cursor if hovering over handles
+                            if self.selected_shape_indices.len() > 1 {
+                                if let Some(handle_idx) = self.group_handle_under_mouse(pos) {
+                                    let cursor = match handle_idx {
+                                        0 | 3 => egui::CursorIcon::ResizeNwSe,
+                                        _ => egui::CursorIcon::ResizeNeSw,
+                                    };
+                                    ctx.set_cursor_icon(cursor);
+                                }
+                            } else if let Some(selected_idx) = self.primary_selected {
                                 if selected_idx < self.canvas.shapes.len() {
                                     if let Some(handle_idx) =
                                         self.get_handle_under_mouse(selected_idx, pos)
@@ -1286,8 +1367,10 @@ impl eframe::App for App {
                                     egui::StrokeKind::Outside,
                                 );
 
-                                // Resize handles only on the primary selected shape
-                                if self.primary_selected == Some(idx) {
+                                // Resize handles on the primary shape (single-select only)
+                                if self.primary_selected == Some(idx)
+                                    && self.selected_shape_indices.len() == 1
+                                {
                                     let is_text_or_sticky = matches!(
                                         self.canvas.shapes[idx].data,
                                         ShapeData::Text { .. } | ShapeData::StickyNote { .. }
@@ -1321,6 +1404,40 @@ impl eframe::App for App {
                                         );
                                     }
                                 }
+                            }
+                        }
+                    }
+
+                    // Group selection box + corner resize handles for multi-select
+                    if self.selected_shape_indices.len() > 1 {
+                        if let Some(bounds) = self.selection_bounds() {
+                            let screen_bounds = egui::Rect::from_min_max(
+                                self.canvas_to_screen(bounds.min),
+                                self.canvas_to_screen(bounds.max),
+                            );
+                            painter.rect_stroke(
+                                screen_bounds,
+                                0.0,
+                                egui::Stroke::new(1.0, egui::Color32::from_rgb(99, 102, 241)),
+                                egui::StrokeKind::Outside,
+                            );
+                            let corners = [
+                                screen_bounds.left_top(),
+                                screen_bounds.right_top(),
+                                screen_bounds.left_bottom(),
+                                screen_bounds.right_bottom(),
+                            ];
+                            for &c in &corners {
+                                painter.rect(
+                                    egui::Rect::from_center_size(c, egui::vec2(8.0, 8.0)),
+                                    2.0,
+                                    egui::Color32::WHITE,
+                                    egui::Stroke::new(
+                                        1.5,
+                                        egui::Color32::from_rgb(99, 102, 241),
+                                    ),
+                                    egui::StrokeKind::Outside,
+                                );
                             }
                         }
                     }
