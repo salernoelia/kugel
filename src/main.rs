@@ -1143,7 +1143,8 @@ impl eframe::App for App {
                         let mut text_edit = egui::TextEdit::multiline(&mut self.editing_text_buffer)
                             .font(font_id)
                             .text_color(text_color)
-                            .frame(false);
+                            .frame(false)
+                            .margin(egui::Margin::same(0));
 
                         if let ShapeData::StickyNote { rect, .. } = &self.canvas.shapes[idx].data {
                             let text_width = (rect.width() - 16.0) * self.zoom;
@@ -1155,15 +1156,6 @@ impl eframe::App for App {
 
                         let response = ui.add(text_edit);
                         response.request_focus();
-
-                        // Draw selection outline around the response rect
-                        let border_rect = response.rect.expand(6.0);
-                        ui.painter().rect_stroke(
-                            border_rect,
-                            4.0,
-                            egui::Stroke::new(1.5, egui::Color32::from_rgb(99, 102, 241)),
-                            egui::StrokeKind::Outside,
-                        );
 
                         // Live-update the canvas text as the user types
                         match &mut self.canvas.shapes[idx].data {

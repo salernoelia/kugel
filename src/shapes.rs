@@ -399,7 +399,7 @@ impl ShapeData {
         }
     }
 
-    pub fn render(&self, painter: &egui::Painter, zoom: f32, pan_offset: egui::Vec2) {
+    pub fn render(&self, painter: &egui::Painter, zoom: f32, pan_offset: egui::Vec2, is_editing: bool) {
         let transform = |pos: egui::Pos2| -> egui::Pos2 {
             egui::pos2(pos.x * zoom + pan_offset.x, pos.y * zoom + pan_offset.y)
         };
@@ -429,6 +429,9 @@ impl ShapeData {
                 painter.circle(center_transformed, radius_transformed, fill, stroke);
             }
             ShapeData::Text { pos, text, color, size, max_width, .. } => {
+                if is_editing {
+                    return;
+                }
                 let screen_pos = transform(*pos);
                 let font_id = egui::FontId::proportional(*size * zoom);
                 if let Some(mw) = max_width {
@@ -459,12 +462,14 @@ impl ShapeData {
                 // Draw filled rounded rect
                 painter.rect_filled(transformed_rect, 6.0 * zoom, *bg_color);
                 // Draw text inside with padding
-                let padding = 8.0 * zoom;
-                let text_rect = transformed_rect.shrink(padding);
-                if text_rect.width() > 0.0 && text_rect.height() > 0.0 {
-                    let font_id = egui::FontId::proportional(*text_size * zoom);
-                    let galley = painter.layout(text.clone(), font_id, *text_color, text_rect.width());
-                    painter.galley(text_rect.min.into(), galley, *text_color);
+                if !is_editing {
+                    let padding = 8.0 * zoom;
+                    let text_rect = transformed_rect.shrink(padding);
+                    if text_rect.width() > 0.0 && text_rect.height() > 0.0 {
+                        let font_id = egui::FontId::proportional(*text_size * zoom);
+                        let galley = painter.layout(text.clone(), font_id, *text_color, text_rect.width());
+                        painter.galley(text_rect.min.into(), galley, *text_color);
+                    }
                 }
             }
         }

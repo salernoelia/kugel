@@ -170,18 +170,12 @@ impl Canvas {
 
     pub fn render(&self, painter: &egui::Painter, zoom: f32, pan_offset: egui::Vec2, editing_index: Option<usize>) {
         for (idx, shape) in self.shapes.iter().enumerate() {
-            if Some(idx) == editing_index {
-                // Skip rendering text shape when editing to avoid double overlay
-                // But still render sticky notes (just their background)
-                if matches!(shape.data, ShapeData::Text { .. }) {
-                    continue;
-                }
-            }
-            shape.data.render(painter, zoom, pan_offset);
+            let is_editing = Some(idx) == editing_index;
+            shape.data.render(painter, zoom, pan_offset, is_editing);
         }
 
         if let Some(shape) = &self.current_shape {
-            shape.data.render(painter, zoom, pan_offset);
+            shape.data.render(painter, zoom, pan_offset, false);
         }
     }
 
