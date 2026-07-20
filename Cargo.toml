@@ -1,6 +1,6 @@
 [package]
 name = "kugel"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 authors = ["Elia Salerno"]
 description = "A minimalist, high performance mood board."
@@ -17,6 +17,11 @@ rfd = "0.15"
 image = { version = "0.25", features = ["png", "jpeg", "webp"] }
 base64 = "0.22"
 arboard = "3.4"
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+self-replace = "1"
+flate2 = "1"
+tar = "0.4"
+tempfile = "3"
 
 # macOS: register an NSApplicationDelegate so double-clicked `.kugel` files
 # (delivered via the openFiles Apple Event, not argv) reach the app.
@@ -41,7 +46,7 @@ depends = "libx11-6, libxi6, libxtst6, libxinerama1, libxcursor1, libxrandr2, li
 name = "Kugel"
 identifier = "com.elia.kugel"
 icon = ["assets/icon.png", "assets/icon.icns"]
-version = "0.1.0"
+version = "0.1.2"
 copyright = "Copyright © 2026 Elia Salerno. All rights reserved."
 short_description = "A minimalist, high performance mood board."
 

@@ -63,6 +63,159 @@ fn default_true() -> bool {
     true
 }
 
+/// Detect whether a string looks like Markdown (has syntax we'd want to strip).
+fn looks_like_markdown(text: &str) -> bool {
+    text.lines().any(|line| {
+        let t = line.trim_start();
+        t.starts_with('#')            // headings
+            || t.starts_with("- ")    // unordered list
+            || t.starts_with("* ")
+            || t.starts_with("+ ")
+            || t.starts_with("> ")    // blockquote
+            || t.starts_with("```")   // fenced code
+            || t.starts_with("|")     // table
+    }) || text.contains("**")          // bold
+        || text.contains("__")         // bold/underline
+        || text.contains("`")          // inline code
+        || (text.contains("](") && text.contains('[')) // links/images
+}
+
+/// Convert Markdown into plain text by removing the syntax that makes it Markdown.
+/// Best-effort, line based; keeps the readable content, drops the markup.
+fn strip_markdown(text: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut in_fence = false;
+
+    for raw in text.lines() {
+        let trimmed = raw.trim_start();
+
+        // Fenced code blocks: drop the ``` fences, keep the code lines verbatim.
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            out.push(raw.to_string());
+            continue;
+        }
+
+        let indent = &raw[..raw.len() - trimmed.len()];
+        let mut line = trimmed.to_string();
+
+        // Headings: strip leading #'s and any trailing closing #'s.
+        if line.starts_with('#') {
+            line = line.trim_start_matches('#').trim_start().to_string();
+            line = line.trim_end_matches('#').trim_end().to_string();
+        }
+
+        // Blockquotes: strip leading > markers.
+        while line.starts_with('>') {
+            line = line[1..].trim_start().to_string();
+        }
+
+        // List markers: "- ", "* ", "+ ", or "1. ".
+        if let Some(rest) = line
+            .strip_prefix("- ")
+            .or_else(|| line.strip_prefix("* "))
+            .or_else(|| line.strip_prefix("+ "))
+        {
+            line = format!("• {}", rest);
+        } else if let Some(pos) = line.find(". ") {
+            if line[..pos].chars().all(|c| c.is_ascii_digit()) && pos > 0 {
+                line = line[pos + 2..].to_string();
+            }
+        }
+
+        // Horizontal rules -> blank line.
+        if line == "---" || line == "***" || line == "___" {
+            line.clear();
+        }
+
+        line = strip_inline_markdown(&line);
+        out.push(format!("{}{}", indent, line));
+    }
+
+    out.join("\n")
+}
+
+/// Remove inline Markdown markup: emphasis, code spans, and links/images.
+fn strip_inline_markdown(line: &str) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let c = chars[i];
+        match c {
+            // Image / link: ![alt](url) or [text](url) -> keep alt/text.
+            '!' if chars.get(i + 1) == Some(&'[') => {
+                i += 1; // skip '!', fall through handles '['
+                continue;
+            }
+            '[' => {
+                if let Some(close) = chars[i..].iter().position(|&x| x == ']') {
+                    let end = i + close;
+                    // Must be followed by "(...)" to count as a link.
+                    if chars.get(end + 1) == Some(&'(') {
+                        if let Some(paren) = chars[end + 1..].iter().position(|&x| x == ')') {
+                            out.extend(&chars[i + 1..end]);
+                            i = end + 1 + paren + 1;
+                            continue;
+                        }
+                    }
+                }
+                out.push(c);
+                i += 1;
+            }
+            // Emphasis / bold markers: skip runs of * or _.
+            '*' | '_' => {
+                while i < chars.len() && (chars[i] == '*' || chars[i] == '_') {
+                    i += 1;
+                }
+            }
+            // Inline code: skip backticks, keep contents.
+            '`' => {
+                i += 1;
+            }
+            _ => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+
+    out
+}
+
+#[derive(Clone)]
+enum UiEvent {
+    UpdateAvailable {
+        version: String,
+        html_url: String,
+        download_url: String,
+    },
+    UpToDate,
+    UpdateCheckFailed(String),
+    UpdateApplied,
+    UpdateInstallFailed(String),
+}
+
+#[derive(Default, Clone)]
+enum UpdateState {
+    #[default]
+    Idle,
+    Checking,
+    UpdateAvailable {
+        version: String,
+        html_url: String,
+        download_url: String,
+    },
+    UpToDate,
+    Updating,
+    UpdateDone,
+    Failed(String),
+}
+
 #[derive(Clone)]
 struct IconPair {
     light: egui::TextureHandle,
@@ -96,8 +249,7 @@ struct Icons {
 impl Icons {
     fn new(ctx: &egui::Context) -> Self {
         let load = |name: &str, bytes: &[u8]| -> IconPair {
-            let img = image::load_from_memory(bytes)
-                .expect("Failed to load icon from memory");
+            let img = image::load_from_memory(bytes).expect("Failed to load icon from memory");
             let rgba = img.to_rgba8();
             let color_img_light = egui::ColorImage::from_rgba_unmultiplied(
                 [rgba.width() as usize, rgba.height() as usize],
@@ -140,14 +292,23 @@ impl Icons {
         };
 
         Self {
-            select: load("select", include_bytes!("../assets/icons/mouse-pointer-2.png")),
+            select: load(
+                "select",
+                include_bytes!("../assets/icons/mouse-pointer-2.png"),
+            ),
             pen: load("pen", include_bytes!("../assets/icons/pen.png")),
             line: load("line", include_bytes!("../assets/icons/line.png")),
-            rectangle: load("rectangle", include_bytes!("../assets/icons/rectangle-horizontal.png")),
+            rectangle: load(
+                "rectangle",
+                include_bytes!("../assets/icons/rectangle-horizontal.png"),
+            ),
             circle: load("circle", include_bytes!("../assets/icons/circle.png")),
             text: load("text", include_bytes!("../assets/icons/text-initial.png")),
             note: load("note", include_bytes!("../assets/icons/sticky-note.png")),
-            section: load("section", include_bytes!("../assets/icons/square-dashed.png")),
+            section: load(
+                "section",
+                include_bytes!("../assets/icons/square-dashed.png"),
+            ),
             import: load("import", include_bytes!("../assets/icons/import.png")),
             undo: load("undo", include_bytes!("../assets/icons/undo.png")),
             redo: load("redo", include_bytes!("../assets/icons/redo.png")),
@@ -158,7 +319,10 @@ impl Icons {
             theme_dark: load("theme_dark", include_bytes!("../assets/icons/moon.png")),
             theme_light: load("theme_light", include_bytes!("../assets/icons/sun.png")),
             settings: load("settings", include_bytes!("../assets/icons/settings.png")),
-            paintbrush: load("paintbrush", include_bytes!("../assets/icons/paintbrush.png")),
+            paintbrush: load(
+                "paintbrush",
+                include_bytes!("../assets/icons/paintbrush.png"),
+            ),
             wallpaper: load("wallpaper", include_bytes!("../assets/icons/wallpaper.png")),
         }
     }
@@ -166,19 +330,27 @@ impl Icons {
     fn icon_button(&self, ui: &mut egui::Ui, pair: &IconPair, tooltip: &str) -> egui::Response {
         let is_dark = ui.visuals().dark_mode;
         let texture = if is_dark { &pair.dark } else { &pair.light };
-        let image = egui::Image::new(texture)
-            .fit_to_exact_size(egui::vec2(22.0, 22.0));
+        let image = egui::Image::new(texture).fit_to_exact_size(egui::vec2(22.0, 22.0));
         ui.add(egui::ImageButton::new(image).frame(false))
             .on_hover_text(tooltip)
     }
 
-    fn selectable_icon_button(&self, ui: &mut egui::Ui, selected: bool, pair: &IconPair, tooltip: &str) -> egui::Response {
+    fn selectable_icon_button(
+        &self,
+        ui: &mut egui::Ui,
+        selected: bool,
+        pair: &IconPair,
+        tooltip: &str,
+    ) -> egui::Response {
         let is_dark = ui.visuals().dark_mode;
         let texture = if is_dark { &pair.dark } else { &pair.light };
-        let image = egui::Image::new(texture)
-            .fit_to_exact_size(egui::vec2(22.0, 22.0));
-        ui.add(egui::ImageButton::new(image).selected(selected).frame(false))
-            .on_hover_text(tooltip)
+        let image = egui::Image::new(texture).fit_to_exact_size(egui::vec2(22.0, 22.0));
+        ui.add(
+            egui::ImageButton::new(image)
+                .selected(selected)
+                .frame(false),
+        )
+        .on_hover_text(tooltip)
     }
 }
 
@@ -237,10 +409,16 @@ struct App {
 
     // Icons
     icons: Option<Icons>,
+
+    // Update state
+    update_state: UpdateState,
+    ui_event_tx: std::sync::mpsc::Sender<UiEvent>,
+    ui_event_rx: std::sync::mpsc::Receiver<UiEvent>,
 }
 
 impl Default for App {
     fn default() -> Self {
+        let (ui_event_tx, ui_event_rx) = std::sync::mpsc::channel();
         Self {
             canvas: Canvas::default(),
             tool: Tool::Select,
@@ -270,11 +448,14 @@ impl Default for App {
             dark_mode: true,
             style_applied: false,
             last_system_theme: None,
-                        current_file_path: None,
+            current_file_path: None,
             is_dirty: false,
             close_confirmed: false,
             top_panel_collapsed: false,
             icons: None,
+            update_state: UpdateState::Idle,
+            ui_event_tx,
+            ui_event_rx,
         }
     }
 }
@@ -399,7 +580,71 @@ impl App {
             }
         }
 
+        // Start checking for updates in the background
+        app.update_state = UpdateState::Checking;
+        spawn_update_check(app.ui_event_tx.clone(), cc.egui_ctx.clone());
+
         app
+    }
+
+    fn check_for_updates(&mut self, ctx: &egui::Context) {
+        self.update_state = UpdateState::Checking;
+        spawn_update_check(self.ui_event_tx.clone(), ctx.clone());
+    }
+
+    fn perform_self_update(&mut self, download_url: String, ctx: &egui::Context) {
+        self.update_state = UpdateState::Updating;
+        let ui_tx = self.ui_event_tx.clone();
+        let ctx_clone = ctx.clone();
+
+        std::thread::spawn(move || {
+            let res = do_self_update(&download_url);
+            match res {
+                Ok(()) => {
+                    let _ = ui_tx.send(UiEvent::UpdateApplied);
+                }
+                Err(e) => {
+                    let _ = ui_tx.send(UiEvent::UpdateInstallFailed(e));
+                }
+            }
+            ctx_clone.request_repaint();
+        });
+    }
+
+    fn apply_ui_events(&mut self) {
+        while let Ok(event) = self.ui_event_rx.try_recv() {
+            match event {
+                UiEvent::UpdateAvailable {
+                    version,
+                    html_url,
+                    download_url,
+                } => {
+                    self.update_state = UpdateState::UpdateAvailable {
+                        version,
+                        html_url,
+                        download_url,
+                    };
+                }
+                UiEvent::UpToDate => {
+                    self.update_state = UpdateState::UpToDate;
+                }
+                UiEvent::UpdateCheckFailed(err) => {
+                    self.update_state = UpdateState::Failed(err);
+                }
+                UiEvent::UpdateApplied => {
+                    self.update_state = UpdateState::UpdateDone;
+                    self.notification = Some((
+                        "Update installed. Restart Kugel to use the new version.".to_string(),
+                        std::time::Instant::now(),
+                    ));
+                }
+                UiEvent::UpdateInstallFailed(err) => {
+                    self.update_state = UpdateState::Failed(err.clone());
+                    self.notification =
+                        Some((format!("Update failed: {err}"), std::time::Instant::now()));
+                }
+            }
+        }
     }
 
     fn open_kugel_file(&mut self, path: &std::path::Path, ctx: &egui::Context) -> bool {
@@ -623,18 +868,23 @@ impl App {
         }
         None
     }
-
 }
 
 impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, "top_panel_collapsed", &self.top_panel_collapsed);
         if let Some(path) = &self.current_file_path {
-            eframe::set_value(storage, "last_file_path", &path.to_string_lossy().to_string());
+            eframe::set_value(
+                storage,
+                "last_file_path",
+                &path.to_string_lossy().to_string(),
+            );
         }
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.apply_ui_events();
+
         // macOS delivers double-clicked / "Open With" files via an Apple Event
         // rather than argv; open whatever was queued since the last frame.
         #[cfg(target_os = "macos")]
@@ -794,16 +1044,30 @@ impl eframe::App for App {
                     .show(ui, |ui| {
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
-                                if icons.icon_button(ui, &icons.settings, if self.top_panel_collapsed { "Show Settings" } else { "Hide Settings" }).clicked() {
+                                if icons
+                                    .icon_button(
+                                        ui,
+                                        &icons.settings,
+                                        if self.top_panel_collapsed {
+                                            "Show Settings"
+                                        } else {
+                                            "Hide Settings"
+                                        },
+                                    )
+                                    .clicked()
+                                {
                                     self.top_panel_collapsed = !self.top_panel_collapsed;
                                 }
                             });
                             if self.top_panel_collapsed {
                                 return;
                             }
-                            ui.separator();
                             ui.horizontal(|ui| {
-                                let wallpaper_tex = if is_dark { &icons.wallpaper.dark } else { &icons.wallpaper.light };
+                                let wallpaper_tex = if is_dark {
+                                    &icons.wallpaper.dark
+                                } else {
+                                    &icons.wallpaper.light
+                                };
                                 let wallpaper_image = egui::Image::new(wallpaper_tex)
                                     .fit_to_exact_size(egui::vec2(18.0, 18.0));
                                 ui.add(wallpaper_image).on_hover_text("Background Color");
@@ -814,18 +1078,24 @@ impl eframe::App for App {
                                 );
                             });
                             ui.checkbox(&mut self.use_grid, "Show Grid");
-                            ui.separator();
                             ui.horizontal(|ui| {
                                 let theme_icon = if self.dark_mode {
                                     &icons.theme_light
                                 } else {
                                     &icons.theme_dark
                                 };
-                                if icons.icon_button(
-                                    ui,
-                                    theme_icon,
-                                    if self.dark_mode { "Switch to Light Theme" } else { "Switch to Dark Theme" }
-                                ).clicked() {
+                                if icons
+                                    .icon_button(
+                                        ui,
+                                        theme_icon,
+                                        if self.dark_mode {
+                                            "Switch to Light Theme"
+                                        } else {
+                                            "Switch to Dark Theme"
+                                        },
+                                    )
+                                    .clicked()
+                                {
                                     self.dark_mode = !self.dark_mode;
                                     // Smoothly toggle background color if default
                                     if self.dark_mode {
@@ -847,6 +1117,118 @@ impl eframe::App for App {
                                     self.pan_offset = egui::Vec2::ZERO;
                                 }
                             });
+
+                            // Collect update state data before drawing to avoid borrow conflicts.
+                            enum UpdateAction {
+                                None,
+                                CheckUpdates,
+                                PerformUpdate(String),
+                            }
+                            let busy = matches!(
+                                self.update_state,
+                                UpdateState::Checking | UpdateState::Updating
+                            );
+                            let update_info: Option<(String, String, String)> =
+                                if let UpdateState::UpdateAvailable {
+                                    version,
+                                    html_url,
+                                    download_url,
+                                } = &self.update_state
+                                {
+                                    Some((version.clone(), html_url.clone(), download_url.clone()))
+                                } else {
+                                    None
+                                };
+                            let update_err: Option<String> =
+                                if let UpdateState::Failed(e) = &self.update_state {
+                                    Some(e.clone())
+                                } else {
+                                    None
+                                };
+
+                            let mut action = UpdateAction::None;
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .add_enabled(!busy, egui::Button::new("Check for updates"))
+                                    .clicked()
+                                {
+                                    action = UpdateAction::CheckUpdates;
+                                }
+                                match &self.update_state {
+                                    UpdateState::Idle => {}
+                                    UpdateState::Checking => {
+                                        ui.spinner();
+                                        ui.label(
+                                            egui::RichText::new("Checking...")
+                                                .color(ui.visuals().weak_text_color()),
+                                        );
+                                    }
+                                    UpdateState::UpToDate => {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "v{} is up to date",
+                                                env!("CARGO_PKG_VERSION")
+                                            ))
+                                            .color(ui.visuals().weak_text_color()),
+                                        );
+                                    }
+                                    UpdateState::UpdateAvailable { .. } => {
+                                        if let Some((version, html_url, download_url)) =
+                                            &update_info
+                                        {
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "v{version} available!"
+                                                ))
+                                                .color(egui::Color32::from_rgb(240, 180, 60)),
+                                            );
+                                            ui.hyperlink_to("Release notes", html_url);
+                                            if !download_url.is_empty()
+                                                && ui
+                                                    .button(
+                                                        egui::RichText::new("Update now").color(
+                                                            egui::Color32::from_rgb(120, 217, 120),
+                                                        ),
+                                                    )
+                                                    .clicked()
+                                            {
+                                                action = UpdateAction::PerformUpdate(
+                                                    download_url.clone(),
+                                                );
+                                            }
+                                        }
+                                    }
+                                    UpdateState::Updating => {
+                                        ui.spinner();
+                                        ui.label(
+                                            egui::RichText::new("Installing update...")
+                                                .color(ui.visuals().weak_text_color()),
+                                        );
+                                    }
+                                    UpdateState::UpdateDone => {
+                                        ui.label(
+                                            egui::RichText::new("Restart to apply update")
+                                                .color(egui::Color32::from_rgb(120, 217, 120)),
+                                        );
+                                    }
+                                    UpdateState::Failed(_) => {
+                                        if let Some(err) = &update_err {
+                                            ui.label(
+                                                egui::RichText::new(format!("Failed: {err}"))
+                                                    .color(ui.visuals().error_fg_color)
+                                                    .small(),
+                                            );
+                                        }
+                                    }
+                                }
+                            });
+                            match action {
+                                UpdateAction::CheckUpdates => self.check_for_updates(ctx),
+                                UpdateAction::PerformUpdate(url) => {
+                                    self.perform_self_update(url, ctx)
+                                }
+                                UpdateAction::None => {}
+                            }
                         });
                     });
             });
@@ -880,7 +1262,10 @@ impl eframe::App for App {
                             }
                             for &(t, icon_tex, tooltip) in &tools {
                                 let selected = self.tool == t;
-                                if icons.selectable_icon_button(ui, selected, icon_tex, tooltip).clicked() {
+                                if icons
+                                    .selectable_icon_button(ui, selected, icon_tex, tooltip)
+                                    .clicked()
+                                {
                                     self.tool = t;
                                     self.clear_selection();
                                     self.editing_text_index = None;
@@ -893,14 +1278,21 @@ impl eframe::App for App {
 
                             ui.separator();
 
-                            if icons.icon_button(ui, &icons.import, "Import Image (I)").clicked() {
+                            if icons
+                                .icon_button(ui, &icons.import, "Import Image (I)")
+                                .clicked()
+                            {
                                 self.import_image_dialog(ctx);
                             }
 
                             ui.separator();
 
                             // Colors & Properties
-                            let paintbrush_tex = if is_dark { &icons.paintbrush.dark } else { &icons.paintbrush.light };
+                            let paintbrush_tex = if is_dark {
+                                &icons.paintbrush.dark
+                            } else {
+                                &icons.paintbrush.light
+                            };
                             let size_image = egui::Image::new(paintbrush_tex)
                                 .fit_to_exact_size(egui::vec2(18.0, 18.0));
                             ui.add(size_image).on_hover_text("Stroke Size");
@@ -930,9 +1322,7 @@ impl eframe::App for App {
                                 }
                                 self.is_dirty = true;
                             }
-                            if self.recoloring_selection
-                                && ui.input(|i| i.pointer.any_released())
-                            {
+                            if self.recoloring_selection && ui.input(|i| i.pointer.any_released()) {
                                 self.recoloring_selection = false;
                             }
 
@@ -953,7 +1343,10 @@ impl eframe::App for App {
                                 self.editing_text_index = None;
                                 self.is_dirty = true;
                             }
-                            if icons.icon_button(ui, &icons.clear, "Clear Canvas").clicked() {
+                            if icons
+                                .icon_button(ui, &icons.clear, "Clear Canvas")
+                                .clicked()
+                            {
                                 self.canvas.clear();
                                 self.clear_selection();
                                 self.editing_text_index = None;
@@ -963,13 +1356,22 @@ impl eframe::App for App {
                             ui.separator();
 
                             // File & Export
-                            if icons.icon_button(ui, &icons.save, "Save Board (Cmd+S)").clicked() {
+                            if icons
+                                .icon_button(ui, &icons.save, "Save Board (Cmd+S)")
+                                .clicked()
+                            {
                                 self.save();
                             }
-                            if icons.icon_button(ui, &icons.open, "Open Board (Cmd+O)").clicked() {
+                            if icons
+                                .icon_button(ui, &icons.open, "Open Board (Cmd+O)")
+                                .clicked()
+                            {
                                 self.open_file_dialog(ctx);
                             }
-                            if icons.icon_button(ui, &icons.export, "Export Board (Cmd+E)").clicked() {
+                            if icons
+                                .icon_button(ui, &icons.export, "Export Board (Cmd+E)")
+                                .clicked()
+                            {
                                 self.show_export_dialog = true;
                             }
                         });
@@ -2147,11 +2549,17 @@ impl App {
                         }
                     }
 
-                    // Fallback to normal text label
+                    // Fallback to normal text label. If the clipboard holds
+                    // Markdown, strip the syntax so the label is clean plain text.
+                    let label_text = if looks_like_markdown(&text) {
+                        strip_markdown(&text)
+                    } else {
+                        text
+                    };
                     let center_canvas = self.paste_target_canvas(ctx);
                     let idx = self
                         .canvas
-                        .add_text(center_canvas, text, self.selected_color);
+                        .add_text(center_canvas, label_text, self.selected_color);
                     self.is_dirty = true;
                     self.select_single(idx);
                     self.tool = Tool::Select; // Auto-switch!
@@ -2342,4 +2750,175 @@ impl App {
             }
         }
     }
+}
+
+fn platform_asset_name() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "kugel-macos.app.tar.gz"
+    }
+    #[cfg(target_os = "linux")]
+    {
+        "kugel-linux"
+    }
+    #[cfg(target_os = "windows")]
+    {
+        "kugel-windows.exe"
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        ""
+    }
+}
+
+fn spawn_update_check(ui_tx: std::sync::mpsc::Sender<UiEvent>, ctx: egui::Context) {
+    std::thread::spawn(move || {
+        let result = (|| -> Result<(String, String, String), String> {
+            let client = reqwest::blocking::Client::builder()
+                .user_agent("kugel-updater")
+                .build()
+                .map_err(|e| e.to_string())?;
+            let resp: serde_json::Value = client
+                .get("https://api.github.com/repos/salernoelia/kugel/releases/latest")
+                .send()
+                .map_err(|e| e.to_string())?
+                .json()
+                .map_err(|e| e.to_string())?;
+            let tag = resp["tag_name"]
+                .as_str()
+                .ok_or("Missing tag_name")?
+                .trim_start_matches('v')
+                .to_string();
+            let html_url = resp["html_url"]
+                .as_str()
+                .ok_or("Missing html_url")?
+                .to_string();
+            let asset_name = platform_asset_name();
+            let download_url = resp["assets"]
+                .as_array()
+                .and_then(|assets| {
+                    assets
+                        .iter()
+                        .find(|a| a["name"].as_str().map(|n| n == asset_name).unwrap_or(false))
+                })
+                .and_then(|a| a["browser_download_url"].as_str())
+                .unwrap_or("")
+                .to_string();
+            Ok((tag, html_url, download_url))
+        })();
+
+        match result {
+            Ok((latest, html_url, download_url)) => {
+                let current = env!("CARGO_PKG_VERSION");
+                if latest != current {
+                    let _ = ui_tx.send(UiEvent::UpdateAvailable {
+                        version: latest,
+                        html_url,
+                        download_url,
+                    });
+                } else {
+                    let _ = ui_tx.send(UiEvent::UpToDate);
+                }
+            }
+            Err(e) => {
+                let _ = ui_tx.send(UiEvent::UpdateCheckFailed(e));
+            }
+        }
+        ctx.request_repaint();
+    });
+}
+
+fn do_self_update(download_url: &str) -> Result<(), String> {
+    let tmp_dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "macos")]
+    {
+        let archive_path = tmp_dir.path().join("kugel-update.tar.gz");
+        let mut archive_file = std::fs::File::create(&archive_path).map_err(|e| e.to_string())?;
+        let client = reqwest::blocking::Client::builder()
+            .user_agent("kugel-updater")
+            .build()
+            .map_err(|e| e.to_string())?;
+        let bytes = client
+            .get(download_url)
+            .send()
+            .and_then(|r| r.bytes())
+            .map_err(|e| e.to_string())?;
+        std::io::copy(&mut bytes.as_ref(), &mut archive_file).map_err(|e| e.to_string())?;
+
+        let file = std::fs::File::open(&archive_path).map_err(|e| e.to_string())?;
+        let gz = flate2::read::GzDecoder::new(file);
+        let mut archive = tar::Archive::new(gz);
+
+        let extract_to = tmp_dir.path().join("kugel_bin");
+        for entry in archive.entries().map_err(|e| e.to_string())? {
+            let mut entry = entry.map_err(|e| e.to_string())?;
+            let entry_path = entry.path().map_err(|e| e.to_string())?;
+            let file_name = entry_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            if file_name == "kugel" {
+                entry.unpack(&extract_to).map_err(|e| e.to_string())?;
+                break;
+            }
+        }
+
+        if !extract_to.exists() {
+            return Err("Could not find kugel binary inside update archive".to_string());
+        }
+
+        self_replace::self_replace(&extract_to).map_err(|e| e.to_string())?;
+
+        // Re-sign the .app bundle after binary replacement.
+        if let Ok(exe_path) = std::env::current_exe() {
+            let mut current = exe_path.as_path();
+            let mut bundle_path: Option<std::path::PathBuf> = None;
+            loop {
+                if current.extension().and_then(|e| e.to_str()) == Some("app") {
+                    bundle_path = Some(current.to_path_buf());
+                    break;
+                }
+                match current.parent() {
+                    Some(p) => current = p,
+                    None => break,
+                }
+            }
+            if let Some(bundle) = bundle_path {
+                let _ = std::process::Command::new("codesign")
+                    .args(["-s", "-", "--deep", "--force"])
+                    .arg(&bundle)
+                    .output();
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let bin_path = tmp_dir.path().join("kugel_new");
+        let client = reqwest::blocking::Client::builder()
+            .user_agent("kugel-updater")
+            .build()
+            .map_err(|e| e.to_string())?;
+        let bytes = client
+            .get(download_url)
+            .send()
+            .and_then(|r| r.bytes())
+            .map_err(|e| e.to_string())?;
+        std::fs::write(&bin_path, &bytes).map_err(|e| e.to_string())?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&bin_path)
+                .map_err(|e| e.to_string())?
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&bin_path, perms).map_err(|e| e.to_string())?;
+        }
+
+        self_replace::self_replace(&bin_path).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
 }
