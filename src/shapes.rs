@@ -329,11 +329,16 @@ impl ShapeData {
                     _ => {}
                 }
             }
-            ShapeData::StickyNote { rect, .. } => {
+            ShapeData::StickyNote { rect, text_size, .. } => {
                 match handle_index {
-                    1 | 3 => { // Right-side handles: adjust width only
+                    1 | 3 => { // Right-side handles: adjust width and scale text size
+                        let old_w = rect.width();
                         let new_w = (mouse_pos.x - rect.min.x).max(50.0);
-                        rect.max.x = rect.min.x + new_w;
+                        if old_w > 0.0 {
+                            let scale = new_w / old_w;
+                            rect.max.x = rect.min.x + new_w;
+                            *text_size = (*text_size * scale).clamp(8.0, 200.0);
+                        }
                     }
                     _ => {}
                 }
