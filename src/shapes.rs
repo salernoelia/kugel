@@ -59,6 +59,8 @@ pub enum ShapeData {
         bg_color: egui::Color32,
         text_color: egui::Color32,
         text_size: f32,
+        #[serde(skip)]
+        cached_height: Option<f32>,
     },
 }
 
