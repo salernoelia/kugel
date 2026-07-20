@@ -331,27 +331,9 @@ impl ShapeData {
             }
             ShapeData::StickyNote { rect, .. } => {
                 match handle_index {
-                    3 => { // Bottom-Right
-                        let new_w = (mouse_pos.x - rect.min.x).max(10.0);
-                        let new_h = (mouse_pos.y - rect.min.y).max(10.0);
-                        rect.max = rect.min + egui::vec2(new_w, new_h);
-                    }
-                    0 => { // Top-Left
-                        let new_w = (rect.max.x - mouse_pos.x).max(10.0);
-                        let new_h = (rect.max.y - mouse_pos.y).max(10.0);
-                        rect.min = rect.max - egui::vec2(new_w, new_h);
-                    }
-                    1 => { // Top-Right
-                        let new_w = (mouse_pos.x - rect.min.x).max(10.0);
-                        let new_h = (rect.max.y - mouse_pos.y).max(10.0);
+                    1 | 3 => { // Right-side handles: adjust width only
+                        let new_w = (mouse_pos.x - rect.min.x).max(50.0);
                         rect.max.x = rect.min.x + new_w;
-                        rect.min.y = rect.max.y - new_h;
-                    }
-                    2 => { // Bottom-Left
-                        let new_w = (rect.max.x - mouse_pos.x).max(10.0);
-                        let new_h = (mouse_pos.y - rect.min.y).max(10.0);
-                        rect.min.x = rect.max.x - new_w;
-                        rect.max.y = rect.min.y + new_h;
                     }
                     _ => {}
                 }

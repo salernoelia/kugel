@@ -64,15 +64,21 @@ impl Canvas {
                 Some(edit_index)
             }
             Tool::StickyNote => {
-                self.current_shape = Some(Shape::new_sticky_note(
+                // StickyNote is created instantly and placed in edit mode
+                let rect = egui::Rect::from_min_size(pos, egui::vec2(140.0, 140.0));
+                let sticky_shape = Shape::new_sticky_note(
                     self.next_id,
-                    egui::Rect::from_two_pos(pos, pos),
-                    String::new(),
+                    rect,
+                    "".to_string(),
                     egui::Color32::from_rgb(255, 243, 176), // Light yellow
                     egui::Color32::from_rgb(60, 50, 20),    // Dark brown text
                     16.0,
-                ));
-                None
+                );
+                self.history.push(self.shapes.clone());
+                self.shapes.push(sticky_shape);
+                let edit_index = self.shapes.len() - 1;
+                self.next_id += 1;
+                Some(edit_index)
             }
             Tool::Select => None,
         }
@@ -96,11 +102,6 @@ impl Canvas {
                         *rect = egui::Rect::from_two_pos(start, pos);
                     }
                 }
-                ShapeData::StickyNote { rect, .. } => {
-                    if let Some(start) = self.creation_start_pos {
-                        *rect = egui::Rect::from_two_pos(start, pos);
-                    }
-                }
                 ShapeData::Circle { center, radius, .. } => {
                     *radius = center.distance(pos);
                 }
@@ -116,7 +117,6 @@ impl Canvas {
             let keep = match &shape.data {
                 ShapeData::Pen { points, .. } => points.len() > 1,
                 ShapeData::Rectangle { rect, .. } => rect.width() > 1.0 || rect.height() > 1.0,
-                ShapeData::StickyNote { rect, .. } => rect.width() > 5.0 || rect.height() > 5.0,
                 ShapeData::Circle { radius, .. } => *radius > 1.0,
                 _ => true,
             };

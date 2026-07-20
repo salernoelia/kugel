@@ -237,21 +237,37 @@ impl App {
         None
     }
 
-    fn get_handle_under_mouse(&self, bounds: egui::Rect, mouse_pos: egui::Pos2) -> Option<usize> {
+    fn get_handle_under_mouse(&self, shape_idx: usize, mouse_pos: egui::Pos2) -> Option<usize> {
+        let shape = &self.canvas.shapes[shape_idx];
+        let bounds = shape.data.get_bounds();
         let screen_bounds = egui::Rect::from_min_max(
             self.canvas_to_screen(bounds.min),
             self.canvas_to_screen(bounds.max),
         );
-        let handle_positions = [
-            screen_bounds.left_top(),
-            screen_bounds.right_top(),
-            screen_bounds.left_bottom(),
-            screen_bounds.right_bottom(),
-        ];
-        // 8px radius check in screen space
-        for (idx, &pos) in handle_positions.iter().enumerate() {
-            if mouse_pos.distance(pos) <= 8.0 {
-                return Some(idx);
+        let is_text_or_sticky = matches!(
+            shape.data,
+            ShapeData::Text { .. } | ShapeData::StickyNote { .. }
+        );
+
+        if is_text_or_sticky {
+            // Only allow right_top (1) and right_bottom (3) handles
+            let handles = [(1, screen_bounds.right_top()), (3, screen_bounds.right_bottom())];
+            for &(h_idx, pos) in &handles {
+                if mouse_pos.distance(pos) <= 8.0 {
+                    return Some(h_idx);
+                }
+            }
+        } else {
+            let handle_positions = [
+                screen_bounds.left_top(),     // 0
+                screen_bounds.right_top(),    // 1
+                screen_bounds.left_bottom(),  // 2
+                screen_bounds.right_bottom(), // 3
+            ];
+            for (h_idx, &pos) in handle_positions.iter().enumerate() {
+                if mouse_pos.distance(pos) <= 8.0 {
+                    return Some(h_idx);
+                }
             }
         }
         None
@@ -846,8 +862,7 @@ impl eframe::App for App {
                             
                             if let Some(selected_idx) = self.primary_selected {
                                 if selected_idx < self.canvas.shapes.len() {
-                                    let bounds = self.canvas.shapes[selected_idx].data.get_bounds();
-                                    if let Some(handle_idx) = self.get_handle_under_mouse(bounds, click_pos) {
+                                    if let Some(handle_idx) = self.get_handle_under_mouse(selected_idx, click_pos) {
                                         self.is_resizing = Some(handle_idx);
                                         self.drag_start_pos = click_pos;
                                         clicked_handle = true;
@@ -940,12 +955,19 @@ impl eframe::App for App {
                         // Adjust cursor if hovering over handles (primary selection only)
                         if let Some(selected_idx) = self.primary_selected {
                             if selected_idx < self.canvas.shapes.len() {
-                                let bounds = self.canvas.shapes[selected_idx].data.get_bounds();
-                                if let Some(handle_idx) = self.get_handle_under_mouse(bounds, pos) {
-                                    let cursor = match handle_idx {
-                                        0 | 3 => egui::CursorIcon::ResizeNwSe,
-                                        1 | 2 => egui::CursorIcon::ResizeNeSw,
-                                        _ => egui::CursorIcon::Default,
+                                if let Some(handle_idx) = self.get_handle_under_mouse(selected_idx, pos) {
+                                    let is_text_or_sticky = matches!(
+                                        self.canvas.shapes[selected_idx].data,
+                                        ShapeData::Text { .. } | ShapeData::StickyNote { .. }
+                                    );
+                                    let cursor = if is_text_or_sticky {
+                                        egui::CursorIcon::ResizeHorizontal
+                                    } else {
+                                        match handle_idx {
+                                            0 | 3 => egui::CursorIcon::ResizeNwSe,
+                                            1 | 2 => egui::CursorIcon::ResizeNeSw,
+                                            _ => egui::CursorIcon::Default,
+                                        }
                                     };
                                     ctx.set_cursor_icon(cursor);
                                 }
@@ -953,17 +975,27 @@ impl eframe::App for App {
                         }
                     } else {
                         // Drawing shapes tool: Text starts on clicked(), others on drag_started()
-                        if self.tool == Tool::Text && response.clicked() {
+                        // Drawing shapes tool: Text and StickyNote start on clicked(), others on drag_started()
+                        if (self.tool == Tool::Text || self.tool == Tool::StickyNote) && response.clicked() {
                             if let Some(idx) = self.hit_test(canvas_pos) {
-                                // Clicked existing shape: if it's text, edit it
-                                if let ShapeData::Text { text, .. } = &self.canvas.shapes[idx].data {
-                                    self.editing_text_index = Some(idx);
-                                    self.editing_text_buffer = text.clone();
-                                    self.select_single(idx);
-                                    self.marquee_start = None;
+                                // Clicked existing shape: if it's text or sticky note, edit it
+                                match &self.canvas.shapes[idx].data {
+                                    ShapeData::Text { text, .. } => {
+                                        self.editing_text_index = Some(idx);
+                                        self.editing_text_buffer = text.clone();
+                                        self.select_single(idx);
+                                        self.marquee_start = None;
+                                    }
+                                    ShapeData::StickyNote { text, .. } => {
+                                        self.editing_text_index = Some(idx);
+                                        self.editing_text_buffer = text.clone();
+                                        self.select_single(idx);
+                                        self.marquee_start = None;
+                                    }
+                                    _ => {}
                                 }
                             } else {
-                                // Clicked empty space: start new text shape
+                                // Clicked empty space: start new text or sticky note shape
                                 let edit_idx = self.canvas.start_shape(
                                     self.tool,
                                     canvas_pos,
@@ -977,7 +1009,7 @@ impl eframe::App for App {
                                     self.select_single(idx);
                                 }
                             }
-                        } else if self.tool != Tool::Text && response.drag_started() {
+                        } else if self.tool != Tool::Text && self.tool != Tool::StickyNote && response.drag_started() {
                             // Start Pen, Rectangle, Circle on drag start
                             let edit_idx = self.canvas.start_shape(
                                 self.tool,
@@ -1030,12 +1062,20 @@ impl eframe::App for App {
 
                             // Resize handles only on the primary selected shape
                             if self.primary_selected == Some(idx) {
-                                let handle_positions = [
-                                    screen_bounds.left_top(),
-                                    screen_bounds.right_top(),
-                                    screen_bounds.left_bottom(),
-                                    screen_bounds.right_bottom(),
-                                ];
+                                let is_text_or_sticky = matches!(
+                                    self.canvas.shapes[idx].data,
+                                    ShapeData::Text { .. } | ShapeData::StickyNote { .. }
+                                );
+                                let handle_positions = if is_text_or_sticky {
+                                    vec![screen_bounds.right_top(), screen_bounds.right_bottom()]
+                                } else {
+                                    vec![
+                                        screen_bounds.left_top(),
+                                        screen_bounds.right_top(),
+                                        screen_bounds.left_bottom(),
+                                        screen_bounds.right_bottom(),
+                                    ]
+                                };
                                 for &h_pos in &handle_positions {
                                     painter.rect(
                                         egui::Rect::from_center_size(h_pos, egui::vec2(8.0, 8.0)),
@@ -1051,16 +1091,33 @@ impl eframe::App for App {
                 }
             }
 
-            // Dynamic text dimensions caching
+            // Dynamic text dimensions caching & StickyNote bottom auto-resizing
             for shape in &mut self.canvas.shapes {
-                if let ShapeData::Text { text, size, max_width, cached_size, .. } = &mut shape.data {
-                    let font_id = egui::FontId::proportional(*size);
-                    let galley = if let Some(mw) = max_width {
-                        ui.fonts(|f| f.layout(text.clone(), font_id, egui::Color32::WHITE, *mw))
-                    } else {
-                        ui.fonts(|f| f.layout_no_wrap(text.clone(), font_id, egui::Color32::WHITE))
-                    };
-                    *cached_size = Some(galley.size());
+                match &mut shape.data {
+                    ShapeData::Text { text, size, max_width, cached_size, .. } => {
+                        let font_id = egui::FontId::proportional(*size);
+                        let galley = if let Some(mw) = max_width {
+                            ui.fonts(|f| f.layout(text.clone(), font_id, egui::Color32::WHITE, *mw))
+                        } else {
+                            ui.fonts(|f| f.layout_no_wrap(text.clone(), font_id, egui::Color32::WHITE))
+                        };
+                        *cached_size = Some(galley.size());
+                    }
+                    ShapeData::StickyNote { rect, text, text_size, .. } => {
+                        let padding = 16.0;
+                        let text_width = (rect.width() - padding).max(10.0);
+                        let font_id = egui::FontId::proportional(*text_size);
+                        let galley = ui.fonts(|f| f.layout(text.clone(), font_id, egui::Color32::WHITE, text_width));
+                        let text_height = galley.size().y;
+                        
+                        let min_height = 140.0;
+                        let required_height = (text_height + padding).max(min_height);
+                        if (rect.height() - required_height).abs() > 0.1 {
+                            rect.max.y = rect.min.y + required_height;
+                            self.is_dirty = true;
+                        }
+                    }
+                    _ => {}
                 }
             }
         });
@@ -1083,10 +1140,18 @@ impl eframe::App for App {
                     .show(ctx, |ui| {
                         let font_id = egui::FontId::proportional(text_size * self.zoom);
                         
-                        let text_edit = egui::TextEdit::multiline(&mut self.editing_text_buffer)
+                        let mut text_edit = egui::TextEdit::multiline(&mut self.editing_text_buffer)
                             .font(font_id)
                             .text_color(text_color)
                             .frame(false);
+
+                        if let ShapeData::StickyNote { rect, .. } = &self.canvas.shapes[idx].data {
+                            let text_width = (rect.width() - 16.0) * self.zoom;
+                            text_edit = text_edit.desired_width(text_width);
+                        } else if let ShapeData::Text { max_width: Some(mw), .. } = &self.canvas.shapes[idx].data {
+                            let text_width = mw * self.zoom;
+                            text_edit = text_edit.desired_width(text_width);
+                        }
 
                         let response = ui.add(text_edit);
                         response.request_focus();
