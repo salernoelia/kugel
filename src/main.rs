@@ -146,6 +146,33 @@ impl App {
         self.primary_selected = Some(idx);
     }
 
+    /// Duplicate all selected shapes in place and select the copies.
+    fn duplicate_selection(&mut self, ctx: &egui::Context) {
+        if self.selected_shape_indices.is_empty() {
+            return;
+        }
+        self.canvas.history.push(self.canvas.shapes.clone());
+        self.canvas.undo_history.clear();
+        self.is_dirty = true;
+
+        let mut indices: Vec<usize> = self.selected_shape_indices.iter().copied().collect();
+        indices.sort_unstable();
+        self.clear_selection();
+
+        for idx in indices {
+            if idx < self.canvas.shapes.len() {
+                let mut dup = self.canvas.shapes[idx].clone();
+                dup.id = self.canvas.next_id;
+                self.canvas.next_id += 1;
+                dup.data.load_textures(ctx, dup.id);
+                self.canvas.shapes.push(dup);
+                let new_idx = self.canvas.shapes.len() - 1;
+                self.selected_shape_indices.insert(new_idx);
+                self.primary_selected = Some(new_idx);
+            }
+        }
+    }
+
     /// Clear all selection.
     fn clear_selection(&mut self) {
         self.selected_shape_indices.clear();
@@ -936,6 +963,9 @@ impl eframe::App for App {
                                     if let Some(idx) = self.hit_test(click_canvas_pos) {
                                         if !self.selected_shape_indices.contains(&idx) {
                                             self.select_single(idx);
+                                        }
+                                        if ui.input(|i| i.modifiers.alt) {
+                                            self.duplicate_selection(ctx);
                                         }
                                         self.is_dragging_shape = true;
                                         self.drag_start_pos = click_pos;
