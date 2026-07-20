@@ -338,10 +338,7 @@ impl eframe::App for App {
         // Combine all checks in a single ctx.input closure so events are read atomically.
         let has_paste = self.editing_text_index.is_none()
             && ctx.input(|i| {
-                let cmd_v =
-                    (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::V);
-                let paste_event = i.events.iter().any(|e| matches!(e, egui::Event::Paste(_)));
-                cmd_v || paste_event
+                (i.modifiers.command || i.modifiers.ctrl) && i.key_released(egui::Key::V)
             });
 
         if has_paste {
