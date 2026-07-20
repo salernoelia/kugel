@@ -1,0 +1,170 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+      - '[0-9]*'
+    paths:
+      - 'Cargo.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  create-tag:
+    name: Create version tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      tag_exists: ${{ steps.check_tag.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version from Cargo.toml
+        id: get_version
+        run: |
+          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check if tag already exists
+        id: check_tag
+        run: |
+          if git tag | grep -q "^${{ steps.get_version.outputs.version }}$"; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create and push tag
+        if: github.ref_type != 'tag' && steps.check_tag.outputs.exists == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.get_version.outputs.version }}"
+          git push origin "${{ steps.get_version.outputs.version }}"
+
+  build:
+    name: Build and Release
+    needs: create-tag
+    if: |
+      always() &&
+      (needs.create-tag.result == 'success') &&
+      (needs.create-tag.outputs.tag_exists == 'false' || github.ref_type == 'tag' || github.event_name == 'workflow_dispatch')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_files: |
+              kugel-linux
+              kugel-linux.tar.gz
+              kugel-linux.deb
+            binary_path: target/release/kugel
+
+          - os: macos-latest
+            artifact_files: kugel-macos.app.tar.gz
+            binary_path: target/release/kugel
+
+          - os: windows-latest
+            artifact_files: kugel-windows.exe
+            binary_path: target/release/kugel.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libx11-dev \
+            libxi-dev \
+            libxtst-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libgl1-mesa-dev \
+            libssl-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Bundle macOS .app
+        if: matrix.os == 'macos-latest'
+        run: |
+          VERSION="${{ needs.create-tag.outputs.version }}"
+          APP=kugel.app
+          mkdir -p "$APP/Contents/MacOS"
+          mkdir -p "$APP/Contents/Resources"
+          cp target/release/kugel "$APP/Contents/MacOS/kugel"
+          cp assets/icon.icns "$APP/Contents/Resources/icon.icns"
+          cat > "$APP/Contents/Info.plist" << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key>          <string>kugel</string>
+            <key>CFBundleExecutable</key>    <string>kugel</string>
+            <key>CFBundleIdentifier</key>    <string>com.salernoelia.kugel</string>
+            <key>CFBundleVersion</key>       <string>${VERSION}</string>
+            <key>CFBundleShortVersionString</key> <string>${VERSION}</string>
+            <key>CFBundlePackageType</key>   <string>APPL</string>
+            <key>CFBundleIconFile</key>      <string>icon</string>
+          </dict>
+          </plist>
+          EOF
+          tar -czf kugel-macos.app.tar.gz "$APP"
+
+      - name: Rename binary (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: cp target/release/kugel kugel-linux
+
+      - name: Create Linux tarball
+        if: matrix.os == 'ubuntu-latest'
+        run: tar -czf kugel-linux.tar.gz kugel-linux README.md
+
+      - name: Install cargo-deb (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo install cargo-deb --locked
+
+      - name: Build .deb package (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cargo deb --no-build
+          DEB_PATH=$(ls target/debian/*.deb | head -1)
+          cp "$DEB_PATH" kugel-linux.deb
+
+      - name: Build (Windows)
+        if: matrix.os == 'windows-latest'
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: cargo build --release
+        shell: bash
+
+      - name: Rename binary (Windows)
+        if: matrix.os == 'windows-latest'
+        run: cp target/release/kugel.exe kugel-windows.exe
+        shell: bash
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-tag.outputs.version }}
+          fail_on_unmatched_files: true
+          files: ${{ matrix.artifact_files }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

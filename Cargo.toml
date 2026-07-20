@@ -2,11 +2,51 @@
 name = "kugel"
 version = "0.1.0"
 edition = "2021"
+authors = ["Elia Salerno"]
+description = "A minimalist, high performance mood board which runs on desktop"
+license = "MIT"
+repository = "https://github.com/salernoelia/kugel"
 
 [dependencies]
-egui = "0.32.3"
-eframe = { version = "0.32.3", default-features = true }
+egui = { version = "0.32.3", features = ["serde"] }
+eframe = { version = "0.32.3", features = ["serde"], default-features = true }
 skia-safe = { version = "0.88.0", features = ["gl", "textlayout"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rfd = "0.15"
+image = { version = "0.25", features = ["png", "jpeg", "webp"] }
+base64 = "0.22"
+arboard = "3.4"
+
+[package.metadata.deb]
+maintainer = "Elia Salerno"
+section = "utility"
+priority = "optional"
+assets = [
+	["target/release/kugel", "usr/bin/kugel", "755"],
+	["assets/icon.png", "usr/share/icons/hicolor/512x512/apps/kugel.png", "644"],
+	["packaging/kugel.desktop", "usr/share/applications/kugel.desktop", "644"],
+	["README.md", "usr/share/doc/kugel/README.md", "644"],
+]
+depends = "libx11-6, libxi6, libxtst6, libxinerama1, libxcursor1, libxrandr2, libxkbcommon0, libwayland-client0, libgl1, libssl3"
+
+[package.metadata.bundle]
+name = "Kugel"
+identifier = "com.elia.kugel"
+icon = ["assets/icon.png", "assets/icon.icns"]
+version = "0.1.0"
+copyright = "Copyright © 2026 Elia Salerno. All rights reserved."
+short_description = "A minimalist, high performance mood board."
+
+[[package.metadata.bundle.document_type]]
+name = "Kugel Mood Board"
+role = "Editor"
+icon = "assets/icon.icns"
+ext = ["kugel"]
+mime_types = ["application/x-kugel"]
 
 [profile.release]
 opt-level = 2
+debug = false
+strip = "symbols"
+

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Kugel
+GenericName=Mood Board
+Comment=Minimalist, high performance mood board
+Exec=/usr/bin/kugel %f
+Icon=kugel
+Terminal=false
+Type=Application
+Categories=Graphics;Utility;
+MimeType=application/x-kugel;
