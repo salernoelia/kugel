@@ -73,6 +73,7 @@ struct App {
     is_resizing: Option<usize>,      // Selected handle index: 0=TL, 1=TR, 2=BL, 3=BR
     is_dragging_shape: bool,
     drag_start_pos: egui::Pos2,
+    snap_correction: egui::Vec2,
     marquee_start: Option<egui::Pos2>,
 
     // Copy / Paste buffer
@@ -119,6 +120,7 @@ impl Default for App {
             is_resizing: None,
             is_dragging_shape: false,
             drag_start_pos: egui::Pos2::ZERO,
+            snap_correction: egui::Vec2::ZERO,
             copied_shape: None,
             editing_text_index: None,
             editing_text_buffer: String::new(),
@@ -243,6 +245,70 @@ impl App {
             }
         }
         false
+    }
+
+    /// Alignment snapping: compare the moving bounds' edges/centers against every
+    /// non-selected shape and return the nearest correction (canvas units) plus the
+    /// guide segments to draw. `threshold` is in canvas units.
+    fn compute_alignment_snap(
+        &self,
+        moving: egui::Rect,
+        threshold: f32,
+    ) -> (egui::Vec2, Vec<(egui::Pos2, egui::Pos2)>) {
+        let m_xs = [moving.min.x, moving.center().x, moving.max.x];
+        let m_ys = [moving.min.y, moving.center().y, moving.max.y];
+
+        let mut best_dx = threshold;
+        let mut best_dy = threshold;
+        let mut corr_x = 0.0;
+        let mut corr_y = 0.0;
+        let mut snap_x: Option<(f32, egui::Rect)> = None;
+        let mut snap_y: Option<(f32, egui::Rect)> = None;
+
+        for (i, shape) in self.canvas.shapes.iter().enumerate() {
+            if self.selected_shape_indices.contains(&i) {
+                continue;
+            }
+            let t = shape.data.get_bounds();
+            if !t.is_positive() {
+                continue;
+            }
+            for &tx in &[t.min.x, t.center().x, t.max.x] {
+                for &mx in &m_xs {
+                    let d = (tx - mx).abs();
+                    if d < best_dx {
+                        best_dx = d;
+                        corr_x = tx - mx;
+                        snap_x = Some((tx, t));
+                    }
+                }
+            }
+            for &ty in &[t.min.y, t.center().y, t.max.y] {
+                for &my in &m_ys {
+                    let d = (ty - my).abs();
+                    if d < best_dy {
+                        best_dy = d;
+                        corr_y = ty - my;
+                        snap_y = Some((ty, t));
+                    }
+                }
+            }
+        }
+
+        let correction = egui::vec2(corr_x, corr_y);
+        let corrected = moving.translate(correction);
+        let mut guides = Vec::new();
+        if let Some((tx, t)) = snap_x {
+            let y0 = corrected.min.y.min(t.min.y);
+            let y1 = corrected.max.y.max(t.max.y);
+            guides.push((egui::pos2(tx, y0), egui::pos2(tx, y1)));
+        }
+        if let Some((ty, t)) = snap_y {
+            let x0 = corrected.min.x.min(t.min.x);
+            let x1 = corrected.max.x.max(t.max.x);
+            guides.push((egui::pos2(x0, ty), egui::pos2(x1, ty)));
+        }
+        (correction, guides)
     }
 
     fn screen_to_canvas(&self, screen_pos: egui::Pos2) -> egui::Pos2 {
@@ -590,6 +656,8 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 let (response, mut painter) =
                     ui.allocate_painter(ui.available_size(), egui::Sense::click_and_drag());
+
+                let mut alignment_guides: Vec<(egui::Pos2, egui::Pos2)> = Vec::new();
 
                 // Render background
                 painter.rect_filled(response.rect, 0.0, self.background_color);
@@ -948,6 +1016,7 @@ impl eframe::App for App {
                         }
                         self.is_resizing = None;
                         self.is_dragging_shape = false;
+                        self.snap_correction = egui::Vec2::ZERO;
                         self.marquee_start = None;
                         // Whenever we finish interacting, it might have been a drag or resize, so mark dirty
                         self.is_dirty = true;
@@ -992,6 +1061,7 @@ impl eframe::App for App {
                                         }
                                         self.is_dragging_shape = true;
                                         self.drag_start_pos = click_pos;
+                                        self.snap_correction = egui::Vec2::ZERO;
                                         self.marquee_start = None;
                                     } else {
                                         // Clicking empty space: clear selection and start marquee
@@ -1048,11 +1118,33 @@ impl eframe::App for App {
                                         }
                                     }
                                 } else if self.is_dragging_shape {
+                                    // Move to the raw (unsnapped) position: apply this frame's
+                                    // delta and undo last frame's snap correction, so snapping
+                                    // never accumulates or sticks.
+                                    let to_raw = delta - self.snap_correction;
                                     for &idx in &self.selected_shape_indices {
                                         if idx < self.canvas.shapes.len() {
-                                            self.canvas.shapes[idx].data.translate(delta);
+                                            self.canvas.shapes[idx].data.translate(to_raw);
                                         }
                                     }
+                                    let mut correction = egui::Vec2::ZERO;
+                                    if let Some(p) = self.primary_selected {
+                                        if p < self.canvas.shapes.len() {
+                                            let moving = self.canvas.shapes[p].data.get_bounds();
+                                            let (corr, guides) = self
+                                                .compute_alignment_snap(moving, 6.0 / self.zoom);
+                                            correction = corr;
+                                            alignment_guides = guides;
+                                        }
+                                    }
+                                    if correction != egui::Vec2::ZERO {
+                                        for &idx in &self.selected_shape_indices {
+                                            if idx < self.canvas.shapes.len() {
+                                                self.canvas.shapes[idx].data.translate(correction);
+                                            }
+                                        }
+                                    }
+                                    self.snap_correction = correction;
                                 }
                             }
 
@@ -1232,6 +1324,14 @@ impl eframe::App for App {
                             }
                         }
                     }
+                }
+
+                // Alignment guides (drawn on top while dragging)
+                for (a, b) in &alignment_guides {
+                    painter.line_segment(
+                        [self.canvas_to_screen(*a), self.canvas_to_screen(*b)],
+                        egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 60, 120)),
+                    );
                 }
 
                 // Dynamic text dimensions caching & StickyNote bottom auto-resizing
