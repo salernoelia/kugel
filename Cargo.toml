@@ -1,6 +1,6 @@
 [package]
 name = "kugel"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 authors = ["Elia Salerno"]
 description = "A minimalist, high performance mood board."
