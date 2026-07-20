@@ -610,7 +610,7 @@ impl eframe::App for App {
             });
 
         // 3. FLOATING BOTTOM TOOLBAR
-        let compact_toolbar = ctx.screen_rect().width() < 820.0;
+        let compact_toolbar = ctx.screen_rect().width() < 1080.0;
         egui::Area::new(egui::Id::new("bottom_toolbar"))
             .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -20.0])
             .show(ctx, |ui| {
@@ -621,25 +621,28 @@ impl eframe::App for App {
                     .inner_margin(egui::Margin::symmetric(14, 10))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            // Tools
+                            // Tools: (tool, full label, short label for compact mode)
                             let tools = [
-                                (Tool::Select, "➤ Select"),
-                                (Tool::Pen, "✏ Pen"),
-                                (Tool::Rectangle, "▭ Rect"),
-                                (Tool::Circle, "○ Circle"),
-                                (Tool::Text, "🖹 Text"),
-                                (Tool::StickyNote, "📝 Note"),
-                                (Tool::Section, "⬚ Section"),
+                                (Tool::Select, "➤ Select", "Sel"),
+                                (Tool::Pen, "✏ Pen", "Pen"),
+                                (Tool::Rectangle, "▭ Rect", "Rect"),
+                                (Tool::Circle, "○ Circle", "Circ"),
+                                (Tool::Text, "🖹 Text", "Text"),
+                                (Tool::StickyNote, "📝 Note", "Note"),
+                                (Tool::Section, "⬚ Section", "Sec"),
                             ];
-                            for &(t, label) in &tools {
+                            if compact_toolbar {
+                                ui.spacing_mut().button_padding = egui::vec2(10.0, 8.0);
+                                ui.spacing_mut().item_spacing.x = 6.0;
+                            }
+                            for &(t, label, short) in &tools {
                                 let selected = self.tool == t;
-                                // On narrow windows show icon only to keep just the tools.
-                                let shown = if compact_toolbar {
-                                    label.split_whitespace().next().unwrap_or(label)
+                                let widget: egui::WidgetText = if compact_toolbar {
+                                    egui::RichText::new(short).size(17.0).into()
                                 } else {
-                                    label
+                                    label.into()
                                 };
-                                if ui.selectable_label(selected, shown).clicked() {
+                                if ui.selectable_label(selected, widget).clicked() {
                                     self.tool = t;
                                     self.clear_selection();
                                     self.editing_text_index = None;
