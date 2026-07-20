@@ -93,7 +93,9 @@ jobs:
             libxkbcommon-dev \
             libwayland-dev \
             libgl1-mesa-dev \
-            libssl-dev
+            libssl-dev \
+            libfreetype6-dev \
+            libfontconfig1-dev
 
       - uses: dtolnay/rust-toolchain@stable
 
