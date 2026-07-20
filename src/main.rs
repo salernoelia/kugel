@@ -491,6 +491,19 @@ impl App {
         self.primary_selected = Some(idx);
     }
 
+    /// Select all shapes.
+    fn select_all(&mut self) {
+        self.selected_shape_indices.clear();
+        for idx in 0..self.canvas.shapes.len() {
+            self.selected_shape_indices.insert(idx);
+        }
+        if !self.canvas.shapes.is_empty() {
+            self.primary_selected = Some(self.canvas.shapes.len() - 1);
+        } else {
+            self.primary_selected = None;
+        }
+    }
+
     /// Duplicate all selected shapes in place and select the copies.
     fn duplicate_selection(&mut self, ctx: &egui::Context) {
         if self.selected_shape_indices.is_empty() {
@@ -1461,7 +1474,7 @@ impl eframe::App for App {
 
                     if zoom_factor != 1.0 {
                         let old_zoom = self.zoom;
-                        self.zoom = (self.zoom * zoom_factor).clamp(0.1, 10.0);
+                        self.zoom = (self.zoom * zoom_factor).clamp(0.5, 10.0);
 
                         let zoom_change = self.zoom / old_zoom;
                         self.pan_offset = pointer_pos.to_vec2()
@@ -1559,6 +1572,16 @@ impl eframe::App for App {
                 }
                 if has_shortcut(ui, egui::Key::E, true) {
                     self.show_export_dialog = true;
+                }
+
+                // Select all (Cmd/Ctrl + A)
+                if self.editing_text_index.is_none() && has_shortcut(ui, egui::Key::A, true) {
+                    self.tool = Tool::Select;
+                    self.select_all();
+                    self.notification = Some((
+                        format!("Selected {} shape(s)", self.canvas.shapes.len()),
+                        std::time::Instant::now(),
+                    ));
                 }
 
                 // Duplicate selection (Cmd/Ctrl + D)
