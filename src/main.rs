@@ -12,8 +12,8 @@ use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 
 fn main() -> eframe::Result<()> {
-    // Must run on the main thread before the event loop starts so a
-    // double-click that cold-launches the app doesn't drop the open request.
+    // Register for the .kugel open-documents Apple Event before the event loop
+    // starts, so a double-click that cold-launches the app is not dropped.
     #[cfg(target_os = "macos")]
     macos_open::register();
 
@@ -2406,16 +2406,20 @@ impl eframe::App for App {
                         .fill(egui::Color32::from_rgb(31, 41, 55)) // charcoal
                         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(75, 85, 99)))
                         .corner_radius(egui::CornerRadius::same(20)) // pill shape
-                        .inner_margin(egui::Margin::symmetric(16, 8)) // horizontal padding
+                        .inner_margin(egui::Margin::symmetric(20, 8)) // horizontal and vertical padding
                         .show(ui, |ui| {
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(msg)
-                                        .color(egui::Color32::WHITE)
-                                        .strong(),
-                                )
-                                .truncate(),
+                            let font_id = egui::FontId::proportional(14.0);
+                            let mut job = egui::text::LayoutJob::simple(
+                                msg.clone(),
+                                font_id,
+                                egui::Color32::WHITE,
+                                320.0, // wrap width
                             );
+                            job.halign = egui::Align::Center;
+                            job.wrap.max_rows = 2;
+                            job.wrap.break_anywhere = true;
+                            job.wrap.overflow_character = Some('…');
+                            ui.add(egui::Label::new(job));
                         });
                 });
         }
