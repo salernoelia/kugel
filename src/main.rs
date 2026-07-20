@@ -1379,7 +1379,10 @@ impl eframe::App for App {
                             }
 
                             if response.drag_stopped() {
-                                self.canvas.finish_shape();
+                                if let Some(idx) = self.canvas.finish_shape() {
+                                    self.select_single(idx);
+                                    self.tool = Tool::Select;
+                                }
                                 self.is_dirty = true;
                             }
                         }

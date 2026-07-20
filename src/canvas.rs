@@ -123,7 +123,7 @@ impl Canvas {
         }
     }
 
-    pub fn finish_shape(&mut self) {
+    pub fn finish_shape(&mut self) -> Option<usize> {
         self.creation_start_pos = None;
         if let Some(shape) = self.current_shape.take() {
             // Verify shape has substance (e.g. pen has points)
@@ -139,8 +139,10 @@ impl Canvas {
                 self.history.push(self.shapes.clone());
                 self.shapes.push(shape);
                 self.next_id += 1;
+                return Some(self.shapes.len() - 1);
             }
         }
+        None
     }
 
     pub fn add_image(&mut self, pos: egui::Pos2, bytes: Vec<u8>, size: [f32; 2], ctx: &egui::Context) -> usize {
