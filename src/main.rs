@@ -613,6 +613,7 @@ impl eframe::App for App {
                                 (Tool::Circle, "○ Circle"),
                                 (Tool::Text, "🖹 Text"),
                                 (Tool::StickyNote, "📝 Note"),
+                                (Tool::Section, "⬚ Section"),
                             ];
                             for &(t, label) in &tools {
                                 let selected = self.tool == t;
@@ -827,6 +828,10 @@ impl eframe::App for App {
                     }
                     if bare_key(ui, egui::Key::N) {
                         self.tool = Tool::StickyNote;
+                        self.clear_selection();
+                    }
+                    if bare_key(ui, egui::Key::F) {
+                        self.tool = Tool::Section;
                         self.clear_selection();
                     }
 
@@ -1547,23 +1552,42 @@ impl eframe::App for App {
                     .show(ctx, |ui| {
                         let font_id = egui::FontId::proportional(text_size * self.zoom);
 
+                        // Force the wrap width to exactly match the shape's inner width.
+                        // egui otherwise clamps multiline wrap to the Area's available
+                        // width, which shrinks near screen edges and mismatches the note.
+                        let wrap_px: Option<f32> = match &self.canvas.shapes[idx].data {
+                            ShapeData::StickyNote { rect, .. } => {
+                                Some((rect.width() - 16.0) * self.zoom)
+                            }
+                            ShapeData::Text {
+                                max_width: Some(mw),
+                                ..
+                            } => Some(mw * self.zoom),
+                            _ => None,
+                        };
+
+                        let layout_font = font_id.clone();
+                        let mut layouter =
+                            move |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _w: f32| {
+                                let job = egui::text::LayoutJob::simple(
+                                    buf.as_str().to_owned(),
+                                    layout_font.clone(),
+                                    text_color,
+                                    wrap_px.unwrap_or(f32::INFINITY),
+                                );
+                                ui.fonts(|f| f.layout_job(job))
+                            };
+
                         let mut text_edit =
                             egui::TextEdit::multiline(&mut self.editing_text_buffer)
                                 .font(font_id)
                                 .text_color(text_color)
                                 .frame(false)
-                                .margin(egui::Margin::same(0));
+                                .margin(egui::Margin::same(0))
+                                .layouter(&mut layouter);
 
-                        if let ShapeData::StickyNote { rect, .. } = &self.canvas.shapes[idx].data {
-                            let text_width = (rect.width() - 16.0) * self.zoom;
-                            text_edit = text_edit.desired_width(text_width);
-                        } else if let ShapeData::Text {
-                            max_width: Some(mw),
-                            ..
-                        } = &self.canvas.shapes[idx].data
-                        {
-                            let text_width = mw * self.zoom;
-                            text_edit = text_edit.desired_width(text_width);
+                        if let Some(w) = wrap_px {
+                            text_edit = text_edit.desired_width(w);
                         }
 
                         let response = ui.add(text_edit);

@@ -48,6 +48,14 @@ impl Canvas {
                 ));
                 None
             }
+            Tool::Section => {
+                self.current_shape = Some(Shape::new_section(
+                    self.next_id,
+                    egui::Rect::from_two_pos(pos, pos),
+                    color,
+                ));
+                None
+            }
             Tool::Text => {
                 // Text is created instantly and placed in edit mode
                 let text_shape = Shape::new_text(
@@ -105,6 +113,11 @@ impl Canvas {
                 ShapeData::Circle { center, radius, .. } => {
                     *radius = center.distance(pos);
                 }
+                ShapeData::SectionBox { rect, .. } => {
+                    if let Some(start) = self.creation_start_pos {
+                        *rect = egui::Rect::from_two_pos(start, pos);
+                    }
+                }
                 _ => {}
             }
         }
@@ -118,6 +131,7 @@ impl Canvas {
                 ShapeData::Pen { points, .. } => points.len() > 1,
                 ShapeData::Rectangle { rect, .. } => rect.width() > 1.0 || rect.height() > 1.0,
                 ShapeData::Circle { radius, .. } => *radius > 1.0,
+                ShapeData::SectionBox { rect, .. } => rect.width() > 5.0 && rect.height() > 5.0,
                 _ => true,
             };
 

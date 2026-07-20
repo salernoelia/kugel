@@ -8,6 +8,7 @@ pub enum Tool {
     Circle,
     Text,
     StickyNote,
+    Section,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -65,6 +66,10 @@ pub enum ShapeData {
         cached_height: Option<f32>,
         #[serde(skip)]
         cache_key: Option<u64>,
+    },
+    SectionBox {
+        rect: egui::Rect,
+        color: egui::Color32,
     },
 }
 
@@ -146,6 +151,13 @@ impl Shape {
             },
         }
     }
+
+    pub fn new_section(id: usize, rect: egui::Rect, color: egui::Color32) -> Self {
+        Self {
+            id,
+            data: ShapeData::SectionBox { rect, color },
+        }
+    }
 }
 
 impl ShapeData {
@@ -158,6 +170,7 @@ impl ShapeData {
             ShapeData::Text { .. } => "🖹 Text",
             ShapeData::Image { .. } => "🖼 Image",
             ShapeData::StickyNote { .. } => "📝 Note",
+            ShapeData::SectionBox { .. } => "⬚ Section",
         }
     }
 
@@ -184,6 +197,7 @@ impl ShapeData {
             }
             ShapeData::Image { rect, .. } => *rect,
             ShapeData::StickyNote { rect, .. } => *rect,
+            ShapeData::SectionBox { rect, .. } => *rect,
         }
     }
 
@@ -207,6 +221,9 @@ impl ShapeData {
                 *rect = rect.translate(delta);
             }
             ShapeData::StickyNote { rect, .. } => {
+                *rect = rect.translate(delta);
+            }
+            ShapeData::SectionBox { rect, .. } => {
                 *rect = rect.translate(delta);
             }
         }
@@ -247,6 +264,9 @@ impl ShapeData {
             } => {
                 *rect = egui::Rect::from_min_max(sp(rect.min), sp(rect.max));
                 *text_size = (*text_size * factor).clamp(8.0, 200.0);
+            }
+            ShapeData::SectionBox { rect, .. } => {
+                *rect = egui::Rect::from_min_max(sp(rect.min), sp(rect.max));
             }
         }
     }
@@ -391,6 +411,31 @@ impl ShapeData {
                     _ => {}
                 }
             }
+            ShapeData::SectionBox { rect, .. } => match handle_index {
+                3 => {
+                    rect.max = rect.min
+                        + egui::vec2(
+                            (mouse_pos.x - rect.min.x).max(10.0),
+                            (mouse_pos.y - rect.min.y).max(10.0),
+                        );
+                }
+                0 => {
+                    rect.min = rect.max
+                        - egui::vec2(
+                            (rect.max.x - mouse_pos.x).max(10.0),
+                            (rect.max.y - mouse_pos.y).max(10.0),
+                        );
+                }
+                1 => {
+                    rect.max.x = rect.min.x + (mouse_pos.x - rect.min.x).max(10.0);
+                    rect.min.y = rect.max.y - (rect.max.y - mouse_pos.y).max(10.0);
+                }
+                2 => {
+                    rect.min.x = rect.max.x - (rect.max.x - mouse_pos.x).max(10.0);
+                    rect.max.y = rect.min.y + (mouse_pos.y - rect.min.y).max(10.0);
+                }
+                _ => {}
+            },
         }
     }
 
@@ -424,6 +469,12 @@ impl ShapeData {
             }
             ShapeData::StickyNote { rect, .. } => {
                 rect.expand(tolerance).contains(point)
+            }
+            ShapeData::SectionBox { rect, .. } => {
+                // Only the border is clickable; the interior is click-through so
+                // shapes underneath can be selected.
+                let band = tolerance.max(4.0);
+                rect.expand(band).contains(point) && !rect.shrink(band).contains(point)
             }
         }
     }
@@ -487,12 +538,29 @@ impl ShapeData {
                 }
                 let screen_pos = transform(*pos);
                 let font_id = egui::FontId::proportional(*size * zoom);
+                // Faux-bold: overdraw with a tiny horizontal offset to thicken glyphs.
+                let bold_offset = egui::vec2((0.4 * zoom).max(0.4), 0.0);
                 if let Some(mw) = max_width {
                     let wrap_width = mw * zoom;
-                    let galley = painter.layout(text.clone(), font_id, *color, wrap_width);
-                    painter.galley(screen_pos, galley, *color);
+                    let galley =
+                        painter.layout(text.clone(), font_id.clone(), *color, wrap_width);
+                    painter.galley(screen_pos, galley.clone(), *color);
+                    painter.galley(screen_pos + bold_offset, galley, *color);
                 } else {
-                    painter.text(screen_pos, egui::Align2::LEFT_TOP, text, font_id, *color);
+                    painter.text(
+                        screen_pos,
+                        egui::Align2::LEFT_TOP,
+                        text,
+                        font_id.clone(),
+                        *color,
+                    );
+                    painter.text(
+                        screen_pos + bold_offset,
+                        egui::Align2::LEFT_TOP,
+                        text,
+                        font_id,
+                        *color,
+                    );
                 }
             }
             ShapeData::Image { rect, texture, .. } => {
@@ -524,6 +592,17 @@ impl ShapeData {
                         painter.galley(text_rect.min.into(), galley, *text_color);
                     }
                 }
+            }
+            ShapeData::SectionBox { rect, color } => {
+                let start = transform(rect.min);
+                let end = transform(rect.max);
+                let transformed_rect = egui::Rect::from_two_pos(start, end);
+                painter.rect_stroke(
+                    transformed_rect,
+                    4.0 * zoom,
+                    egui::Stroke::new(1.5, *color),
+                    egui::StrokeKind::Inside,
+                );
             }
         }
     }

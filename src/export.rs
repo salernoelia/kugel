@@ -183,6 +183,16 @@ fn draw_shape_to_skia(canvas: &skia_safe::Canvas, data: &ShapeData) -> Result<()
             let padding = 8.0;
             canvas.draw_str(text, (rect.min.x + padding, rect.min.y + padding + text_size * 0.8), &font, &text_paint);
         }
+        ShapeData::SectionBox { rect, color } => {
+            let sk_rect = skia_safe::Rect::new(rect.min.x, rect.min.y, rect.max.x, rect.max.y);
+            let rrect = skia_safe::RRect::new_rect_xy(sk_rect, 4.0, 4.0);
+            let mut paint = skia_safe::Paint::default();
+            paint.set_anti_alias(true);
+            paint.set_color(to_skia_color(*color));
+            paint.set_style(skia_safe::paint::Style::Stroke);
+            paint.set_stroke_width(1.5);
+            canvas.draw_rrect(rrect, &paint);
+        }
     }
     Ok(())
 }
