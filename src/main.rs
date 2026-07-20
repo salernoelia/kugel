@@ -28,7 +28,7 @@ fn main() -> eframe::Result<()> {
         "Kugel",
         options,
         Box::new(|cc| {
-            // Apply custom premium visual styles to egui
+            // Apply custom visual styles to egui
             let ctx = &cc.egui_ctx;
             ctx.set_visuals(egui::Visuals::dark());
 
@@ -985,7 +985,7 @@ impl eframe::App for App {
 
                 self.canvas.shapes.push(shape);
                 self.select_single(self.canvas.shapes.len() - 1);
-                self.tool = Tool::Select; // Auto-switch!
+                self.tool = Tool::Select;
                 self.notification = Some(("Pasted shape".to_string(), std::time::Instant::now()));
             } else {
                 self.paste_from_clipboard(ctx);
@@ -1726,7 +1726,7 @@ impl eframe::App for App {
                                             );
                                             self.is_dirty = true;
                                             self.select_single(idx);
-                                            self.tool = Tool::Select; // Auto-switch!
+                                            self.tool = Tool::Select;
                                             self.notification = Some((
                                                 "Imported image".to_string(),
                                                 std::time::Instant::now(),
@@ -2376,7 +2376,7 @@ impl eframe::App for App {
                             }
                             self.is_dirty = true;
                             self.editing_text_index = None;
-                            self.tool = Tool::Select; // Auto-switch to Select tool!
+                            self.tool = Tool::Select;
                         }
                     });
             } else {
@@ -2524,7 +2524,7 @@ impl App {
                                     ctx,
                                 );
                                 self.select_single(idx);
-                                self.tool = Tool::Select; // Auto-switch!
+                                self.tool = Tool::Select;
                                 self.notification = Some((
                                     "Pasted image from clipboard".to_string(),
                                     std::time::Instant::now(),
@@ -2563,7 +2563,7 @@ impl App {
                                             ctx,
                                         );
                                         self.select_single(idx);
-                                        self.tool = Tool::Select; // Auto-switch!
+                                        self.tool = Tool::Select;
                                         self.notification = Some((
                                             "Pasted image file from clipboard".to_string(),
                                             std::time::Instant::now(),
@@ -2589,7 +2589,7 @@ impl App {
                         .add_text(center_canvas, label_text, self.selected_color);
                     self.is_dirty = true;
                     self.select_single(idx);
-                    self.tool = Tool::Select; // Auto-switch!
+                    self.tool = Tool::Select;
                     self.notification = Some((
                         "Pasted text from clipboard".to_string(),
                         std::time::Instant::now(),
@@ -2625,7 +2625,7 @@ impl App {
                                     .add_image(center_canvas, compressed_bytes, size, ctx);
                             self.is_dirty = true;
                             self.select_single(idx);
-                            self.tool = Tool::Select; // Auto-switch!
+                            self.tool = Tool::Select;
                             self.notification = Some((
                                 "Imported image successfully".to_string(),
                                 std::time::Instant::now(),
