@@ -872,7 +872,9 @@ impl eframe::App for App {
 
                             if !clicked_handle {
                                 if let Some(idx) = self.hit_test(click_canvas_pos) {
-                                    self.select_single(idx);
+                                    if !self.selected_shape_indices.contains(&idx) {
+                                        self.select_single(idx);
+                                    }
                                     self.is_dragging_shape = true;
                                     self.drag_start_pos = click_pos;
                                     self.marquee_start = None;
