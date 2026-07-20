@@ -569,14 +569,13 @@ impl eframe::App for App {
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
                                 let icon = if self.top_panel_collapsed {
-                                    "▸"
+                                    "View"
                                 } else {
-                                    "▾"
+                                    "Hide"
                                 };
                                 if ui.button(icon).clicked() {
                                     self.top_panel_collapsed = !self.top_panel_collapsed;
                                 }
-                                ui.label("View");
                             });
                             if self.top_panel_collapsed {
                                 return;
