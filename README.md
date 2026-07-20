@@ -2,7 +2,13 @@
 
 ![Demo](./assets/demo.png)
 
-A fast, minimalist mood board for the desktop. Drop images, sketch, drag things around, and lay out ideas on an infinite canvas. Built in Rust with egui and Skia.
+A fast, minimalist white-board for the desktop. Drop images, sketch, drag things around, and lay out ideas on an infinite canvas. Built in Rust with egui and Skia.
+
+## Why?
+
+- Speed
+- File-based
+- Desktop
 
 ## Features
 
