@@ -7,6 +7,7 @@ pub enum Tool {
     Rectangle,
     Circle,
     Text,
+    StickyNote,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -40,6 +41,8 @@ pub enum ShapeData {
         text: String,
         color: egui::Color32,
         size: f32,
+        #[serde(default)]
+        max_width: Option<f32>,
         #[serde(skip)]
         cached_size: Option<egui::Vec2>,
     },
@@ -49,6 +52,13 @@ pub enum ShapeData {
         original_size: [f32; 2],
         #[serde(skip)]
         texture: Option<egui::TextureHandle>,
+    },
+    StickyNote {
+        rect: egui::Rect,
+        text: String,
+        bg_color: egui::Color32,
+        text_color: egui::Color32,
+        text_size: f32,
     },
 }
 
@@ -97,6 +107,7 @@ impl Shape {
                 text,
                 color,
                 size,
+                max_width: None,
                 cached_size: None,
             },
         }
@@ -113,6 +124,19 @@ impl Shape {
             },
         }
     }
+
+    pub fn new_sticky_note(id: usize, rect: egui::Rect, text: String, bg_color: egui::Color32, text_color: egui::Color32, text_size: f32) -> Self {
+        Self {
+            id,
+            data: ShapeData::StickyNote {
+                rect,
+                text,
+                bg_color,
+                text_color,
+                text_size,
+            },
+        }
+    }
 }
 
 impl ShapeData {
@@ -124,6 +148,7 @@ impl ShapeData {
             ShapeData::Circle { .. } => "○ Circle",
             ShapeData::Text { .. } => "🖹 Text",
             ShapeData::Image { .. } => "🖼 Image",
+            ShapeData::StickyNote { .. } => "📝 Note",
         }
     }
 
@@ -144,11 +169,12 @@ impl ShapeData {
             ShapeData::Circle { center, radius, .. } => {
                 egui::Rect::from_center_size(*center, egui::Vec2::splat(radius * 2.0))
             }
-            ShapeData::Text { pos, cached_size, .. } => {
-                let size = cached_size.unwrap_or(egui::vec2(100.0, 24.0));
+            ShapeData::Text { pos, max_width, cached_size, .. } => {
+                let size = cached_size.unwrap_or(egui::vec2(max_width.unwrap_or(100.0), 24.0));
                 egui::Rect::from_min_size(*pos, size)
             }
             ShapeData::Image { rect, .. } => *rect,
+            ShapeData::StickyNote { rect, .. } => *rect,
         }
     }
 
@@ -169,6 +195,9 @@ impl ShapeData {
                 *pos += delta;
             }
             ShapeData::Image { rect, .. } => {
+                *rect = rect.translate(delta);
+            }
+            ShapeData::StickyNote { rect, .. } => {
                 *rect = rect.translate(delta);
             }
         }
@@ -258,10 +287,19 @@ impl ShapeData {
                 let dist = center.distance(mouse_pos);
                 *radius = dist.max(5.0);
             }
-            ShapeData::Text { size, .. } => {
-                // Simple sizing based on handle drag delta
-                let change = (delta.x + delta.y) * 0.5;
-                *size = (*size + change).clamp(8.0, 200.0);
+            ShapeData::Text { pos, size, max_width, .. } => {
+                match handle_index {
+                    1 | 3 => {
+                        // Right-side handles: set max_width
+                        let new_w = (mouse_pos.x - pos.x).max(30.0);
+                        *max_width = Some(new_w);
+                    }
+                    _ => {
+                        // Other handles: change font size
+                        let change = (delta.x + delta.y) * 0.5;
+                        *size = (*size + change).clamp(8.0, 200.0);
+                    }
+                }
             }
             ShapeData::Image { rect, original_size, .. } => {
                 let aspect = original_size[0] / original_size[1];
@@ -291,6 +329,33 @@ impl ShapeData {
                     _ => {}
                 }
             }
+            ShapeData::StickyNote { rect, .. } => {
+                match handle_index {
+                    3 => { // Bottom-Right
+                        let new_w = (mouse_pos.x - rect.min.x).max(10.0);
+                        let new_h = (mouse_pos.y - rect.min.y).max(10.0);
+                        rect.max = rect.min + egui::vec2(new_w, new_h);
+                    }
+                    0 => { // Top-Left
+                        let new_w = (rect.max.x - mouse_pos.x).max(10.0);
+                        let new_h = (rect.max.y - mouse_pos.y).max(10.0);
+                        rect.min = rect.max - egui::vec2(new_w, new_h);
+                    }
+                    1 => { // Top-Right
+                        let new_w = (mouse_pos.x - rect.min.x).max(10.0);
+                        let new_h = (rect.max.y - mouse_pos.y).max(10.0);
+                        rect.max.x = rect.min.x + new_w;
+                        rect.min.y = rect.max.y - new_h;
+                    }
+                    2 => { // Bottom-Left
+                        let new_w = (rect.max.x - mouse_pos.x).max(10.0);
+                        let new_h = (mouse_pos.y - rect.min.y).max(10.0);
+                        rect.min.x = rect.max.x - new_w;
+                        rect.max.y = rect.min.y + new_h;
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -314,12 +379,15 @@ impl ShapeData {
             ShapeData::Circle { center, radius, .. } => {
                 center.distance(point) <= radius + tolerance
             }
-            ShapeData::Text { pos, cached_size, .. } => {
-                let size = cached_size.unwrap_or(egui::vec2(100.0, 24.0));
+            ShapeData::Text { pos, max_width, cached_size, .. } => {
+                let size = cached_size.unwrap_or(egui::vec2(max_width.unwrap_or(100.0), 24.0));
                 let bounds = egui::Rect::from_min_size(*pos, size);
                 bounds.expand(tolerance).contains(point)
             }
             ShapeData::Image { rect, .. } => {
+                rect.expand(tolerance).contains(point)
+            }
+            ShapeData::StickyNote { rect, .. } => {
                 rect.expand(tolerance).contains(point)
             }
         }
@@ -378,15 +446,16 @@ impl ShapeData {
                 let stroke = egui::Stroke::new(stroke_width * zoom, *color);
                 painter.circle(center_transformed, radius_transformed, fill, stroke);
             }
-            ShapeData::Text { pos, text, color, size, .. } => {
+            ShapeData::Text { pos, text, color, size, max_width, .. } => {
                 let screen_pos = transform(*pos);
                 let font_id = egui::FontId::proportional(*size * zoom);
-                // Draw text in egui.
-                // We also layout it to cache size for selection bounds.
-                // Note: We update cached_size dynamically when layout runs, but since self is borrowed immutably here,
-                // we'll update it at layout time elsewhere, or we can use a RefCell or just calculate size from font metrics.
-                // In egui, we can layout text to draw it:
-                painter.text(screen_pos, egui::Align2::LEFT_TOP, text, font_id, *color);
+                if let Some(mw) = max_width {
+                    let wrap_width = mw * zoom;
+                    let galley = painter.layout(text.clone(), font_id, *color, wrap_width);
+                    painter.galley(screen_pos, galley, *color);
+                } else {
+                    painter.text(screen_pos, egui::Align2::LEFT_TOP, text, font_id, *color);
+                }
             }
             ShapeData::Image { rect, texture, .. } => {
                 if let Some(tex) = texture {
@@ -399,6 +468,21 @@ impl ShapeData {
                         egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                         egui::Color32::WHITE,
                     );
+                }
+            }
+            ShapeData::StickyNote { rect, text, bg_color, text_color, text_size } => {
+                let start = transform(rect.min);
+                let end = transform(rect.max);
+                let transformed_rect = egui::Rect::from_two_pos(start, end);
+                // Draw filled rounded rect
+                painter.rect_filled(transformed_rect, 6.0 * zoom, *bg_color);
+                // Draw text inside with padding
+                let padding = 8.0 * zoom;
+                let text_rect = transformed_rect.shrink(padding);
+                if text_rect.width() > 0.0 && text_rect.height() > 0.0 {
+                    let font_id = egui::FontId::proportional(*text_size * zoom);
+                    let galley = painter.layout(text.clone(), font_id, *text_color, text_rect.width());
+                    painter.galley(text_rect.min.into(), galley, *text_color);
                 }
             }
         }

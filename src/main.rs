@@ -93,6 +93,11 @@ struct App {
     dark_mode: bool,
     style_applied: bool,
     last_system_theme: Option<egui::Theme>,
+
+    // File state
+    current_file_path: Option<std::path::PathBuf>,
+    is_dirty: bool,
+    close_confirmed: bool,
 }
 
 impl Default for App {
@@ -124,6 +129,9 @@ impl Default for App {
             dark_mode: true,
             style_applied: false,
             last_system_theme: None,
+            current_file_path: None,
+            is_dirty: false,
+            close_confirmed: false,
         }
     }
 }
@@ -193,6 +201,8 @@ impl App {
                 self.canvas.load_textures(ctx);
                 self.clear_selection();
                 self.editing_text_index = None;
+                self.current_file_path = Some(path.to_path_buf());
+                self.is_dirty = false;
                 self.notification = Some((
                     format!("Opened board: {}", path.file_name().unwrap_or_default().to_string_lossy()),
                     std::time::Instant::now(),
@@ -252,11 +262,12 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Handle window close request with unsaved changes prompt
         if ctx.input(|i| i.viewport().close_requested()) {
-            if !self.canvas.shapes.is_empty() {
+            if self.close_confirmed || !self.is_dirty {
+                // Allow close
+            } else {
                 // Intercept close
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 
-                // Show dialog box
                 let confirm = rfd::MessageDialog::new()
                     .set_title("Unsaved Changes")
                     .set_description("Do you want to save the current board before exiting?")
@@ -265,14 +276,16 @@ impl eframe::App for App {
                 
                 match confirm {
                     rfd::MessageDialogResult::Yes => {
-                        if self.save_file_dialog() {
+                        if self.save() {
+                            self.close_confirmed = true;
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
                     }
                     rfd::MessageDialogResult::No => {
+                        self.close_confirmed = true;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
-                    _ => {} // Cancel or close -> keeps window open
+                    _ => {} // Cancel -> keeps window open
                 }
             }
         }
@@ -309,6 +322,7 @@ impl eframe::App for App {
             if let Some(mut shape) = self.copied_shape.clone() {
                 self.canvas.history.push(self.canvas.shapes.clone());
                 self.canvas.undo_history.clear();
+                self.is_dirty = true;
 
                 shape.data.translate(egui::vec2(20.0, 20.0));
                 shape.id = self.canvas.next_id;
@@ -321,6 +335,7 @@ impl eframe::App for App {
                 self.notification = Some(("Pasted shape".to_string(), std::time::Instant::now()));
             } else {
                 self.paste_from_clipboard(ctx);
+                self.is_dirty = true;
             }
         }
         // Apply custom styles and handle theme toggling dynamically
@@ -438,6 +453,7 @@ impl eframe::App for App {
                                 (Tool::Rectangle, "▭ Rect"),
                                 (Tool::Circle, "○ Circle"),
                                 (Tool::Text, "🖹 Text"),
+                                (Tool::StickyNote, "📝 Note"),
                             ];
                             for &(t, label) in &tools {
                                 let selected = self.tool == t;
@@ -476,23 +492,26 @@ impl eframe::App for App {
                                 self.canvas.undo();
                                 self.clear_selection();
                                 self.editing_text_index = None;
+                                self.is_dirty = true;
                             }
                             if ui.button("⮫").clicked() {
                                 self.canvas.redo();
                                 self.clear_selection();
                                 self.editing_text_index = None;
+                                self.is_dirty = true;
                             }
                             if ui.button("🗑 Clear").clicked() {
                                 self.canvas.clear();
                                 self.clear_selection();
                                 self.editing_text_index = None;
+                                self.is_dirty = true;
                             }
 
                             ui.separator();
 
                             // File & Export
                             if ui.button("💾 Save").clicked() {
-                                self.save_file_dialog();
+                                self.save();
                             }
                             if ui.button("📁 Open").clicked() {
                                 self.open_file_dialog(ctx);
@@ -611,6 +630,11 @@ impl eframe::App for App {
                     self.tool = Tool::Text;
                     self.clear_selection();
                 }
+                if bare_key(ui, egui::Key::N) {
+                    self.tool = Tool::StickyNote;
+                    self.clear_selection();
+                }
+
                 if bare_key(ui, egui::Key::I) {
                     self.import_image_dialog(ctx);
                 }
@@ -620,14 +644,16 @@ impl eframe::App for App {
                 self.canvas.undo();
                 self.clear_selection();
                 self.editing_text_index = None;
+                self.is_dirty = true;
             }
             if has_shortcut(ui, egui::Key::Y, true) {
                 self.canvas.redo();
                 self.clear_selection();
                 self.editing_text_index = None;
+                self.is_dirty = true;
             }
             if has_shortcut(ui, egui::Key::S, true) {
-                self.save_file_dialog();
+                self.save();
             }
             if has_shortcut(ui, egui::Key::O, true) {
                 self.open_file_dialog(ctx);
@@ -642,6 +668,7 @@ impl eframe::App for App {
                     if idx < self.canvas.shapes.len() {
                         self.canvas.history.push(self.canvas.shapes.clone());
                         self.canvas.undo_history.clear();
+                        self.is_dirty = true;
 
                         let mut dup = self.canvas.shapes[idx].clone();
                         dup.data.translate(egui::vec2(20.0, 20.0));
@@ -673,6 +700,7 @@ impl eframe::App for App {
                 if self.editing_text_index.is_none() && self.has_selection() {
                     self.canvas.history.push(self.canvas.shapes.clone());
                     self.canvas.undo_history.clear();
+                    self.is_dirty = true;
                     // Remove in reverse order to keep indices valid
                     let mut indices: Vec<usize> = self.selected_shape_indices.iter().copied().collect();
                     indices.sort_unstable_by(|a, b| b.cmp(a));
@@ -700,6 +728,7 @@ impl eframe::App for App {
                 if nudge_delta != egui::Vec2::ZERO {
                     self.canvas.history.push(self.canvas.shapes.clone());
                     self.canvas.undo_history.clear();
+                    self.is_dirty = true;
                     for &idx in &self.selected_shape_indices {
                         if idx < self.canvas.shapes.len() {
                             self.canvas.shapes[idx].data.translate(nudge_delta);
@@ -725,7 +754,7 @@ impl eframe::App for App {
                                 
                                 match confirm {
                                     rfd::MessageDialogResult::Yes => {
-                                        proceed = self.save_file_dialog();
+                                        proceed = self.save();
                                     }
                                     rfd::MessageDialogResult::No => {
                                         proceed = true;
@@ -747,6 +776,7 @@ impl eframe::App for App {
                                         let center_screen = ctx.screen_rect().center();
                                         let center_canvas = self.screen_to_canvas(center_screen);
                                         let idx = self.canvas.add_image(center_canvas, compressed_bytes, size, ctx);
+                                        self.is_dirty = true;
                                         self.select_single(idx);
                                         self.tool = Tool::Select; // Auto-switch!
                                         self.notification = Some(("Imported image".to_string(), std::time::Instant::now()));
@@ -796,6 +826,8 @@ impl eframe::App for App {
                     self.is_resizing = None;
                     self.is_dragging_shape = false;
                     self.marquee_start = None;
+                    // Whenever we finish interacting, it might have been a drag or resize, so mark dirty
+                    self.is_dirty = true;
                 }
 
                 let pointer_pos = response.hover_pos().or(response.interact_pointer_pos());
@@ -850,11 +882,20 @@ impl eframe::App for App {
                         // 3. Double Click Text shape to Edit
                         if ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary)) && response.hovered() {
                             if let Some(idx) = self.hit_test(canvas_pos) {
-                                if let ShapeData::Text { text, .. } = &self.canvas.shapes[idx].data {
-                                    self.editing_text_index = Some(idx);
-                                    self.editing_text_buffer = text.clone();
-                                    self.select_single(idx);
-                                    self.marquee_start = None;
+                                match &self.canvas.shapes[idx].data {
+                                    ShapeData::Text { text, .. } => {
+                                        self.editing_text_index = Some(idx);
+                                        self.editing_text_buffer = text.clone();
+                                        self.select_single(idx);
+                                        self.marquee_start = None;
+                                    }
+                                    ShapeData::StickyNote { text, .. } => {
+                                        self.editing_text_index = Some(idx);
+                                        self.editing_text_buffer = text.clone();
+                                        self.select_single(idx);
+                                        self.marquee_start = None;
+                                    }
+                                    _ => {}
                                 }
                             }
                         }
@@ -958,6 +999,7 @@ impl eframe::App for App {
 
                         if response.drag_stopped() {
                             self.canvas.finish_shape();
+                            self.is_dirty = true;
                         }
                     }
                 }
@@ -1011,10 +1053,14 @@ impl eframe::App for App {
 
             // Dynamic text dimensions caching
             for shape in &mut self.canvas.shapes {
-                if let ShapeData::Text { text, size, cached_size, .. } = &mut shape.data {
-                    let font_id = egui::FontId::proportional(*size * self.zoom);
-                    let galley = ui.fonts(|f| f.layout_no_wrap(text.clone(), font_id, egui::Color32::WHITE));
-                    *cached_size = Some(galley.size() / self.zoom);
+                if let ShapeData::Text { text, size, max_width, cached_size, .. } = &mut shape.data {
+                    let font_id = egui::FontId::proportional(*size);
+                    let galley = if let Some(mw) = max_width {
+                        ui.fonts(|f| f.layout(text.clone(), font_id, egui::Color32::WHITE, *mw))
+                    } else {
+                        ui.fonts(|f| f.layout_no_wrap(text.clone(), font_id, egui::Color32::WHITE))
+                    };
+                    *cached_size = Some(galley.size());
                 }
             }
         });
@@ -1022,8 +1068,11 @@ impl eframe::App for App {
         // 5. INLINE TEXT EDITOR
         if let Some(idx) = self.editing_text_index {
             if idx < self.canvas.shapes.len() {
-                let (canvas_pos, size, color) = match &self.canvas.shapes[idx].data {
+                let (canvas_pos, text_size, text_color) = match &self.canvas.shapes[idx].data {
                     ShapeData::Text { pos, size, color, .. } => (*pos, *size, *color),
+                    ShapeData::StickyNote { rect, text_size, text_color, .. } => {
+                        (rect.min + egui::vec2(8.0, 8.0), *text_size, *text_color)
+                    }
                     _ => (egui::Pos2::ZERO, 24.0, egui::Color32::WHITE),
                 };
                 let screen_pos = self.canvas_to_screen(canvas_pos);
@@ -1032,11 +1081,11 @@ impl eframe::App for App {
                     .fixed_pos(screen_pos)
                     .order(egui::Order::Foreground)
                     .show(ctx, |ui| {
-                        let font_id = egui::FontId::proportional(size * self.zoom);
+                        let font_id = egui::FontId::proportional(text_size * self.zoom);
                         
                         let text_edit = egui::TextEdit::multiline(&mut self.editing_text_buffer)
                             .font(font_id)
-                            .text_color(color)
+                            .text_color(text_color)
                             .frame(false);
 
                         let response = ui.add(text_edit);
@@ -1052,8 +1101,14 @@ impl eframe::App for App {
                         );
 
                         // Live-update the canvas text as the user types
-                        if let ShapeData::Text { text, .. } = &mut self.canvas.shapes[idx].data {
-                            *text = self.editing_text_buffer.clone();
+                        match &mut self.canvas.shapes[idx].data {
+                            ShapeData::Text { text, .. } => {
+                                *text = self.editing_text_buffer.clone();
+                            }
+                            ShapeData::StickyNote { text, .. } => {
+                                *text = self.editing_text_buffer.clone();
+                            }
+                            _ => {}
                         }
 
                         // Close editor on escape, lost focus, or cmd+enter
@@ -1061,15 +1116,23 @@ impl eframe::App for App {
                         let pressed_cmd_enter = ui.input(|i| (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::Enter));
                         
                         if response.lost_focus() || pressed_esc || pressed_cmd_enter {
-                            if self.editing_text_buffer.trim().is_empty() {
-                                // Clean up empty inputs
-                                self.canvas.shapes.remove(idx);
-                                self.clear_selection();
-                            } else {
-                                if let ShapeData::Text { text, .. } = &mut self.canvas.shapes[idx].data {
+                            let is_empty = self.editing_text_buffer.trim().is_empty();
+                            match &mut self.canvas.shapes[idx].data {
+                                ShapeData::Text { text, .. } => {
+                                    if is_empty {
+                                        self.canvas.shapes.remove(idx);
+                                        self.clear_selection();
+                                    } else {
+                                        *text = self.editing_text_buffer.clone();
+                                    }
+                                }
+                                ShapeData::StickyNote { text, .. } => {
+                                    // Don't delete sticky notes for empty text
                                     *text = self.editing_text_buffer.clone();
                                 }
+                                _ => {}
                             }
+                            self.is_dirty = true;
                             self.editing_text_index = None;
                             self.tool = Tool::Select; // Auto-switch to Select tool!
                         }
@@ -1219,6 +1282,7 @@ impl App {
                     let center_screen = ctx.screen_rect().center();
                     let center_canvas = self.screen_to_canvas(center_screen);
                     let idx = self.canvas.add_text(center_canvas, text, self.selected_color);
+                    self.is_dirty = true;
                     self.select_single(idx);
                     self.tool = Tool::Select; // Auto-switch!
                     self.notification = Some((
@@ -1253,6 +1317,7 @@ impl App {
                             let center_screen = ctx.screen_rect().center();
                             let center_canvas = self.screen_to_canvas(center_screen);
                             let idx = self.canvas.add_image(center_canvas, compressed_bytes, size, ctx);
+                            self.is_dirty = true;
                             self.select_single(idx);
                             self.tool = Tool::Select; // Auto-switch!
                             self.notification = Some((
@@ -1272,39 +1337,54 @@ impl App {
         }
     }
 
+    /// Save to current_file_path if known, otherwise prompt with file dialog.
+    fn save(&mut self) -> bool {
+        if let Some(path) = self.current_file_path.clone() {
+            self.save_to_path(&path)
+        } else {
+            self.save_file_dialog()
+        }
+    }
+
+    fn save_to_path(&mut self, path: &std::path::Path) -> bool {
+        let state = CanvasState {
+            version: "1.0".to_string(),
+            shapes: self.canvas.shapes.clone(),
+            background_color: [
+                self.background_color.r(),
+                self.background_color.g(),
+                self.background_color.b(),
+                self.background_color.a(),
+            ],
+            zoom: self.zoom,
+            pan_offset: [self.pan_offset.x, self.pan_offset.y],
+            next_id: self.canvas.next_id,
+            dark_mode: self.dark_mode,
+        };
+        if let Ok(json) = serde_json::to_string_pretty(&state) {
+            if std::fs::write(path, json).is_ok() {
+                self.current_file_path = Some(path.to_path_buf());
+                self.is_dirty = false;
+                self.notification = Some((
+                    "Saved board state successfully".to_string(),
+                    std::time::Instant::now(),
+                ));
+                return true;
+            }
+        }
+        self.notification = Some((
+            "Saving board state failed".to_string(),
+            std::time::Instant::now(),
+        ));
+        false
+    }
+
     fn save_file_dialog(&mut self) -> bool {
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Kugel Mood Board", &["kugel"])
             .save_file()
         {
-            let state = CanvasState {
-                version: "1.0".to_string(),
-                shapes: self.canvas.shapes.clone(),
-                background_color: [
-                    self.background_color.r(),
-                    self.background_color.g(),
-                    self.background_color.b(),
-                    self.background_color.a(),
-                ],
-                zoom: self.zoom,
-                pan_offset: [self.pan_offset.x, self.pan_offset.y],
-                next_id: self.canvas.next_id,
-                dark_mode: self.dark_mode,
-            };
-            if let Ok(json) = serde_json::to_string_pretty(&state) {
-                if std::fs::write(&path, json).is_ok() {
-                    self.notification = Some((
-                        "Saved board state successfully".to_string(),
-                        std::time::Instant::now(),
-                    ));
-                    return true;
-                } else {
-                    self.notification = Some((
-                        "Saving board state failed".to_string(),
-                        std::time::Instant::now(),
-                    ));
-                }
-            }
+            return self.save_to_path(&path);
         }
         false
     }

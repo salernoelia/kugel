@@ -63,6 +63,17 @@ impl Canvas {
                 self.next_id += 1;
                 Some(edit_index)
             }
+            Tool::StickyNote => {
+                self.current_shape = Some(Shape::new_sticky_note(
+                    self.next_id,
+                    egui::Rect::from_two_pos(pos, pos),
+                    String::new(),
+                    egui::Color32::from_rgb(255, 243, 176), // Light yellow
+                    egui::Color32::from_rgb(60, 50, 20),    // Dark brown text
+                    16.0,
+                ));
+                None
+            }
             Tool::Select => None,
         }
     }
@@ -85,6 +96,11 @@ impl Canvas {
                         *rect = egui::Rect::from_two_pos(start, pos);
                     }
                 }
+                ShapeData::StickyNote { rect, .. } => {
+                    if let Some(start) = self.creation_start_pos {
+                        *rect = egui::Rect::from_two_pos(start, pos);
+                    }
+                }
                 ShapeData::Circle { center, radius, .. } => {
                     *radius = center.distance(pos);
                 }
@@ -100,6 +116,7 @@ impl Canvas {
             let keep = match &shape.data {
                 ShapeData::Pen { points, .. } => points.len() > 1,
                 ShapeData::Rectangle { rect, .. } => rect.width() > 1.0 || rect.height() > 1.0,
+                ShapeData::StickyNote { rect, .. } => rect.width() > 5.0 || rect.height() > 5.0,
                 ShapeData::Circle { radius, .. } => *radius > 1.0,
                 _ => true,
             };
@@ -154,7 +171,11 @@ impl Canvas {
     pub fn render(&self, painter: &egui::Painter, zoom: f32, pan_offset: egui::Vec2, editing_index: Option<usize>) {
         for (idx, shape) in self.shapes.iter().enumerate() {
             if Some(idx) == editing_index {
-                continue; // Skip rendering text shape when it is currently being edited to avoid double text overlay/parallax!
+                // Skip rendering text shape when editing to avoid double overlay
+                // But still render sticky notes (just their background)
+                if matches!(shape.data, ShapeData::Text { .. }) {
+                    continue;
+                }
             }
             shape.data.render(painter, zoom, pan_offset);
         }

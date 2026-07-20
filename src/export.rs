@@ -163,6 +163,26 @@ fn draw_shape_to_skia(canvas: &skia_safe::Canvas, data: &ShapeData) -> Result<()
                 );
             }
         }
+        ShapeData::StickyNote { rect, text, bg_color, text_color, text_size } => {
+            let sk_rect = skia_safe::Rect::new(rect.min.x, rect.min.y, rect.max.x, rect.max.y);
+            
+            let mut bg_paint = skia_safe::Paint::default();
+            bg_paint.set_anti_alias(true);
+            bg_paint.set_color(to_skia_color(*bg_color));
+            bg_paint.set_style(skia_safe::paint::Style::Fill);
+            
+            let rrect = skia_safe::RRect::new_rect_xy(sk_rect, 6.0, 6.0);
+            canvas.draw_rrect(rrect, &bg_paint);
+
+            let mut text_paint = skia_safe::Paint::default();
+            text_paint.set_anti_alias(true);
+            text_paint.set_color(to_skia_color(*text_color));
+            let mut font = skia_safe::Font::default();
+            font.set_size(*text_size);
+
+            let padding = 8.0;
+            canvas.draw_str(text, (rect.min.x + padding, rect.min.y + padding + text_size * 0.8), &font, &text_paint);
+        }
     }
     Ok(())
 }
