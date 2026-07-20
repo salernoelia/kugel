@@ -556,14 +556,9 @@ impl eframe::App for App {
             }
         }
 
-        // 1. CONTROLS PANEL (top-left when open, tucked bottom-right when collapsed)
-        let (panel_align, panel_offset) = if self.top_panel_collapsed {
-            (egui::Align2::RIGHT_BOTTOM, [-20.0, -20.0])
-        } else {
-            (egui::Align2::LEFT_TOP, [20.0, 20.0])
-        };
+        // 1. TOP-LEFT CONTROLS PANEL
         egui::Area::new(egui::Id::new("top_left_controls"))
-            .anchor(panel_align, panel_offset)
+            .anchor(egui::Align2::LEFT_TOP, [20.0, 20.0])
             .show(ctx, |ui| {
                 egui::Frame::NONE
                     .fill(panel_bg)
