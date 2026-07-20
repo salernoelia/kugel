@@ -2431,12 +2431,14 @@ impl eframe::App for App {
                         .corner_radius(egui::CornerRadius::same(20)) // pill shape
                         .inner_margin(egui::Margin::symmetric(20, 8)) // horizontal and vertical padding
                         .show(ui, |ui| {
+                            ui.set_min_width(320.0);
+                            ui.set_max_width(600.0);
                             let font_id = egui::FontId::proportional(14.0);
                             let mut job = egui::text::LayoutJob::simple(
                                 msg.clone(),
                                 font_id,
                                 egui::Color32::WHITE,
-                                450.0, // wrap width
+                                600.0, // wrap width
                             );
                             job.halign = egui::Align::Center;
                             job.wrap.max_rows = 2;
