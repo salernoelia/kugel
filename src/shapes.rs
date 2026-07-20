@@ -1,5 +1,51 @@
 use eframe::egui;
 
+/// Serialize image bytes as a base64 string instead of a JSON array of u8.
+///
+/// A raw `Vec<u8>` serialized by `serde_json` becomes `[216, 255, ...]` — with
+/// pretty-printing that is ~6 chars per byte (~25 MB on disk for a 4 MB image).
+/// Base64 is ~1.33 chars per byte, an ~5x reduction. Deserialize accepts either
+/// form so boards saved by older versions (raw array) still load.
+mod image_bytes {
+    use base64::Engine;
+    use serde::de::{Deserializer, Error, SeqAccess, Visitor};
+    use serde::Serializer;
+    use std::fmt;
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        s.serialize_str(&encoded)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        struct BytesVisitor;
+
+        impl<'de> Visitor<'de> for BytesVisitor {
+            type Value = Vec<u8>;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a base64 string or an array of bytes")
+            }
+
+            fn visit_str<E: Error>(self, v: &str) -> Result<Vec<u8>, E> {
+                base64::engine::general_purpose::STANDARD
+                    .decode(v)
+                    .map_err(E::custom)
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<u8>, A::Error> {
+                let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+                while let Some(b) = seq.next_element::<u8>()? {
+                    out.push(b);
+                }
+                Ok(out)
+            }
+        }
+
+        d.deserialize_any(BytesVisitor)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Tool {
     Select,
@@ -58,6 +104,7 @@ pub enum ShapeData {
     },
     Image {
         rect: egui::Rect,
+        #[serde(with = "image_bytes")]
         bytes: Vec<u8>,
         original_size: [f32; 2],
         #[serde(skip)]

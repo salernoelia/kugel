@@ -1678,6 +1678,9 @@ impl eframe::App for App {
                 // Drag and drop images/boards pipeline
                 let dropped_files = ui.input(|i| i.raw.dropped_files.clone());
                 if !dropped_files.is_empty() {
+                    // Split kugel boards (handled one at a time, may prompt) from
+                    // image files (decoded + compressed in parallel below).
+                    let mut image_paths: Vec<std::path::PathBuf> = Vec::new();
                     for file in dropped_files {
                         if let Some(path) = &file.path {
                             if path.extension().map_or(false, |ext| ext == "kugel") {
@@ -1709,32 +1712,60 @@ impl eframe::App for App {
                                     self.open_kugel_file(path, ctx);
                                 }
                             } else {
-                                // Try loading as image...
-                                if let Ok(bytes) = std::fs::read(path) {
-                                    if let Ok(img) = image::load_from_memory(&bytes) {
-                                        if let Ok((compressed_bytes, size)) =
-                                            self.compress_and_scale(img)
-                                        {
-                                            let center_screen = ctx.screen_rect().center();
-                                            let center_canvas =
-                                                self.screen_to_canvas(center_screen);
-                                            let idx = self.canvas.add_image(
-                                                center_canvas,
-                                                compressed_bytes,
-                                                size,
-                                                ctx,
-                                            );
-                                            self.is_dirty = true;
-                                            self.select_single(idx);
-                                            self.tool = Tool::Select;
-                                            self.notification = Some((
-                                                "Imported image".to_string(),
-                                                std::time::Instant::now(),
-                                            ));
-                                        }
-                                    }
-                                }
+                                image_paths.push(path.clone());
                             }
+                        }
+                    }
+
+                    if !image_paths.is_empty() {
+                        // Decode + resize + JPEG-encode is CPU-bound and slow per
+                        // image. Run one worker thread per file so a multi-image
+                        // drop finishes in ~one image's time instead of the sum.
+                        let results: Vec<Option<(Vec<u8>, [f32; 2])>> = std::thread::scope(|s| {
+                            let handles: Vec<_> = image_paths
+                                .iter()
+                                .map(|path| {
+                                    s.spawn(move || {
+                                        let bytes = std::fs::read(path).ok()?;
+                                        let img = image::load_from_memory(&bytes).ok()?;
+                                        Self::compress_and_scale(img).ok()
+                                    })
+                                })
+                                .collect();
+                            handles.into_iter().map(|h| h.join().unwrap_or(None)).collect()
+                        });
+
+                        let center_screen = ctx.screen_rect().center();
+                        let center_canvas = self.screen_to_canvas(center_screen);
+                        let mut last_idx = None;
+                        let mut count = 0;
+                        for result in results {
+                            if let Some((compressed_bytes, size)) = result {
+                                // Cascade multiple drops so they don't stack exactly.
+                                let offset = egui::vec2(20.0 * count as f32, 20.0 * count as f32);
+                                let idx = self.canvas.add_image(
+                                    center_canvas + offset,
+                                    compressed_bytes,
+                                    size,
+                                    ctx,
+                                );
+                                last_idx = Some(idx);
+                                count += 1;
+                            }
+                        }
+
+                        if let Some(idx) = last_idx {
+                            self.is_dirty = true;
+                            self.select_single(idx);
+                            self.tool = Tool::Select;
+                            self.notification = Some((
+                                if count == 1 {
+                                    "Imported image".to_string()
+                                } else {
+                                    format!("Imported {} images", count)
+                                },
+                                std::time::Instant::now(),
+                            ));
                         }
                     }
                 }
@@ -2452,13 +2483,23 @@ impl eframe::App for App {
 }
 
 impl App {
-    fn compress_and_scale(&self, img: image::DynamicImage) -> Result<(Vec<u8>, [f32; 2]), String> {
+    fn compress_and_scale(img: image::DynamicImage) -> Result<(Vec<u8>, [f32; 2]), String> {
+        // Whether any pixel is actually non-opaque. An RGBA source with every
+        // alpha == 255 is treated as opaque so it can go down the JPEG path.
+        fn has_transparency(img: &image::DynamicImage) -> bool {
+            use image::GenericImageView;
+            img.pixels().any(|(_, _, px)| px.0[3] != 255)
+        }
+
         let width = img.width();
         let height = img.height();
         let short_side = width.min(height);
 
-        let scaled_img = if short_side > 2000 {
-            let scale = 2000.0 / short_side as f32;
+        // Scale DOWN only — never enlarge. Cap the short side so huge camera
+        // originals shrink to a screen-reasonable size before encoding.
+        const MAX_SHORT_SIDE: u32 = 1600;
+        let scaled_img = if short_side > MAX_SHORT_SIDE {
+            let scale = MAX_SHORT_SIDE as f32 / short_side as f32;
             let new_w = (width as f32 * scale) as u32;
             let new_h = (height as f32 * scale) as u32;
             img.resize(new_w, new_h, image::imageops::FilterType::Lanczos3)
@@ -2466,16 +2507,28 @@ impl App {
             img
         };
 
+        let out_w = scaled_img.width();
+        let out_h = scaled_img.height();
         let mut compressed_bytes = Vec::new();
-        let encoder = image::codecs::png::PngEncoder::new(&mut compressed_bytes);
-        scaled_img
-            .write_with_encoder(encoder)
-            .map_err(|e| e.to_string())?;
 
-        Ok((
-            compressed_bytes,
-            [scaled_img.width() as f32, scaled_img.height() as f32],
-        ))
+        // Opaque images -> JPEG (strong compression). Images with real
+        // transparency -> PNG, since JPEG can't carry an alpha channel.
+        if scaled_img.color().has_alpha() && has_transparency(&scaled_img) {
+            let encoder = image::codecs::png::PngEncoder::new(&mut compressed_bytes);
+            scaled_img
+                .write_with_encoder(encoder)
+                .map_err(|e| e.to_string())?;
+        } else {
+            const JPEG_QUALITY: u8 = 75;
+            let rgb = scaled_img.to_rgb8();
+            let mut encoder =
+                image::codecs::jpeg::JpegEncoder::new_with_quality(&mut compressed_bytes, JPEG_QUALITY);
+            encoder
+                .encode_image(&rgb)
+                .map_err(|e| e.to_string())?;
+        }
+
+        Ok((compressed_bytes, [out_w as f32, out_h as f32]))
     }
 
     fn try_paste_clipboard_image(&mut self, ctx: &egui::Context) -> bool {
@@ -2487,7 +2540,7 @@ impl App {
                     image.bytes.into_owned(),
                 ) {
                     let dynamic_img = image::DynamicImage::ImageRgba8(rgba);
-                    if let Ok((compressed_bytes, size)) = self.compress_and_scale(dynamic_img) {
+                    if let Ok((compressed_bytes, size)) = Self::compress_and_scale(dynamic_img) {
                         let center_canvas = self.paste_target_canvas(ctx);
                         let idx = self
                             .canvas
@@ -2516,7 +2569,7 @@ impl App {
                         image.bytes.into_owned(),
                     ) {
                         let dynamic_img = image::DynamicImage::ImageRgba8(rgba);
-                        match self.compress_and_scale(dynamic_img) {
+                        match Self::compress_and_scale(dynamic_img) {
                             Ok((compressed_bytes, size)) => {
                                 let center_canvas = self.paste_target_canvas(ctx);
                                 let idx = self.canvas.add_image(
@@ -2555,7 +2608,7 @@ impl App {
                     if path.exists() && path.is_file() {
                         if let Ok(bytes) = std::fs::read(path) {
                             if let Ok(img) = image::load_from_memory(&bytes) {
-                                match self.compress_and_scale(img) {
+                                match Self::compress_and_scale(img) {
                                     Ok((compressed_bytes, size)) => {
                                         let center_canvas = self.paste_target_canvas(ctx);
                                         let idx = self.canvas.add_image(
@@ -2624,7 +2677,7 @@ impl App {
         {
             if let Ok(bytes) = std::fs::read(&path) {
                 if let Ok(img) = image::load_from_memory(&bytes) {
-                    match self.compress_and_scale(img) {
+                    match Self::compress_and_scale(img) {
                         Ok((compressed_bytes, size)) => {
                             let center_canvas = self.paste_target_canvas(ctx);
                             let idx =
