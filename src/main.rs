@@ -1007,6 +1007,7 @@ impl eframe::App for App {
                                     self.editing_text_index = Some(idx);
                                     self.editing_text_buffer = String::new();
                                     self.select_single(idx);
+                                    self.tool = Tool::Select;
                                 }
                             }
                         } else if self.tool != Tool::Text && self.tool != Tool::StickyNote && response.drag_started() {
