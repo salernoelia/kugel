@@ -197,9 +197,15 @@ impl App {
             _ => true,
         };
 
+        let top_panel_collapsed = cc
+            .storage
+            .and_then(|s| eframe::get_value(s, "top_panel_collapsed"))
+            .unwrap_or(false);
+
         let mut app = Self {
             dark_mode,
             last_system_theme: system_theme,
+            top_panel_collapsed,
             ..Self::default()
         };
 
@@ -415,6 +421,10 @@ impl App {
 }
 
 impl eframe::App for App {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, "top_panel_collapsed", &self.top_panel_collapsed);
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Handle window close request with unsaved changes prompt
         if ctx.input(|i| i.viewport().close_requested()) {
@@ -546,9 +556,14 @@ impl eframe::App for App {
             }
         }
 
-        // 1. TOP-LEFT CONTROLS PANEL
+        // 1. CONTROLS PANEL (top-left when open, tucked bottom-right when collapsed)
+        let (panel_align, panel_offset) = if self.top_panel_collapsed {
+            (egui::Align2::RIGHT_BOTTOM, [-20.0, -20.0])
+        } else {
+            (egui::Align2::LEFT_TOP, [20.0, 20.0])
+        };
         egui::Area::new(egui::Id::new("top_left_controls"))
-            .anchor(egui::Align2::LEFT_TOP, [20.0, 20.0])
+            .anchor(panel_align, panel_offset)
             .show(ctx, |ui| {
                 egui::Frame::NONE
                     .fill(panel_bg)
@@ -558,7 +573,11 @@ impl eframe::App for App {
                     .show(ui, |ui| {
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
-                                let icon = if self.top_panel_collapsed { "▸" } else { "▾" };
+                                let icon = if self.top_panel_collapsed {
+                                    "▸"
+                                } else {
+                                    "▾"
+                                };
                                 if ui.button(icon).clicked() {
                                     self.top_panel_collapsed = !self.top_panel_collapsed;
                                 }
@@ -638,7 +657,7 @@ impl eframe::App for App {
                             for &(t, label, short) in &tools {
                                 let selected = self.tool == t;
                                 let widget: egui::WidgetText = if compact_toolbar {
-                                    egui::RichText::new(short).size(17.0).into()
+                                    egui::RichText::new(short).size(13.0).into()
                                 } else {
                                     label.into()
                                 };
@@ -1204,8 +1223,7 @@ impl eframe::App for App {
                                             let old_dist = corner.distance(anchor);
                                             let new_dist = canvas_pos.distance(anchor);
                                             if old_dist > 1.0 {
-                                                let factor =
-                                                    (new_dist / old_dist).clamp(0.2, 5.0);
+                                                let factor = (new_dist / old_dist).clamp(0.2, 5.0);
                                                 if (factor - 1.0).abs() > 0.0001 {
                                                     for &idx in &self.selected_shape_indices {
                                                         if idx < self.canvas.shapes.len() {
@@ -1466,10 +1484,7 @@ impl eframe::App for App {
                                     egui::Rect::from_center_size(c, egui::vec2(8.0, 8.0)),
                                     2.0,
                                     egui::Color32::WHITE,
-                                    egui::Stroke::new(
-                                        1.5,
-                                        egui::Color32::from_rgb(99, 102, 241),
-                                    ),
+                                    egui::Stroke::new(1.5, egui::Color32::from_rgb(99, 102, 241)),
                                     egui::StrokeKind::Outside,
                                 );
                             }
@@ -1509,7 +1524,11 @@ impl eframe::App for App {
                                     })
                                 } else {
                                     ui.fonts(|f| {
-                                        f.layout_no_wrap(text.clone(), font_id, egui::Color32::WHITE)
+                                        f.layout_no_wrap(
+                                            text.clone(),
+                                            font_id,
+                                            egui::Color32::WHITE,
+                                        )
                                     })
                                 };
                                 *cached_size = Some(galley.size());
@@ -1767,9 +1786,9 @@ impl App {
                     if let Ok((compressed_bytes, size)) = self.compress_and_scale(dynamic_img) {
                         let center_screen = ctx.screen_rect().center();
                         let center_canvas = self.screen_to_canvas(center_screen);
-                        let idx =
-                            self.canvas
-                                .add_image(center_canvas, compressed_bytes, size, ctx);
+                        let idx = self
+                            .canvas
+                            .add_image(center_canvas, compressed_bytes, size, ctx);
                         self.select_single(idx);
                         self.tool = Tool::Select;
                         self.notification = Some((
