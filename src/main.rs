@@ -101,6 +101,9 @@ struct App {
     current_file_path: Option<std::path::PathBuf>,
     is_dirty: bool,
     close_confirmed: bool,
+
+    // UI state
+    top_panel_collapsed: bool,
 }
 
 impl Default for App {
@@ -136,6 +139,7 @@ impl Default for App {
             current_file_path: None,
             is_dirty: false,
             close_confirmed: false,
+            top_panel_collapsed: false,
         }
     }
 }
@@ -554,6 +558,17 @@ impl eframe::App for App {
                     .show(ui, |ui| {
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
+                                let icon = if self.top_panel_collapsed { "▸" } else { "▾" };
+                                if ui.button(icon).clicked() {
+                                    self.top_panel_collapsed = !self.top_panel_collapsed;
+                                }
+                                ui.label("View");
+                            });
+                            if self.top_panel_collapsed {
+                                return;
+                            }
+                            ui.separator();
+                            ui.horizontal(|ui| {
                                 ui.label("Bg Color:");
                                 egui::color_picker::color_edit_button_srgba(
                                     ui,
@@ -595,6 +610,7 @@ impl eframe::App for App {
             });
 
         // 3. FLOATING BOTTOM TOOLBAR
+        let compact_toolbar = ctx.screen_rect().width() < 820.0;
         egui::Area::new(egui::Id::new("bottom_toolbar"))
             .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -20.0])
             .show(ctx, |ui| {
@@ -617,11 +633,21 @@ impl eframe::App for App {
                             ];
                             for &(t, label) in &tools {
                                 let selected = self.tool == t;
-                                if ui.selectable_label(selected, label).clicked() {
+                                // On narrow windows show icon only to keep just the tools.
+                                let shown = if compact_toolbar {
+                                    label.split_whitespace().next().unwrap_or(label)
+                                } else {
+                                    label
+                                };
+                                if ui.selectable_label(selected, shown).clicked() {
                                     self.tool = t;
                                     self.clear_selection();
                                     self.editing_text_index = None;
                                 }
+                            }
+
+                            if compact_toolbar {
+                                return;
                             }
 
                             ui.separator();

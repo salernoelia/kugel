@@ -3,7 +3,7 @@ name = "kugel"
 version = "0.1.0"
 edition = "2021"
 authors = ["Elia Salerno"]
-description = "A minimalist, high performance mood board which runs on desktop"
+description = "A minimalist, high performance mood board."
 license = "MIT"
 repository = "https://github.com/salernoelia/kugel"
 
