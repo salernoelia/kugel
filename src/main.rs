@@ -2436,11 +2436,11 @@ impl eframe::App for App {
                                 msg.clone(),
                                 font_id,
                                 egui::Color32::WHITE,
-                                320.0, // wrap width
+                                450.0, // wrap width
                             );
                             job.halign = egui::Align::Center;
                             job.wrap.max_rows = 2;
-                            job.wrap.break_anywhere = true;
+                            job.wrap.break_anywhere = false;
                             job.wrap.overflow_character = Some('…');
                             ui.add(egui::Label::new(job));
                         });
@@ -2587,6 +2587,11 @@ impl App {
                     let idx = self
                         .canvas
                         .add_text(center_canvas, label_text, self.selected_color);
+                    if let Some(shape) = self.canvas.shapes.get_mut(idx) {
+                        if let ShapeData::Text { max_width, .. } = &mut shape.data {
+                            *max_width = Some(600.0);
+                        }
+                    }
                     self.is_dirty = true;
                     self.select_single(idx);
                     self.tool = Tool::Select;
