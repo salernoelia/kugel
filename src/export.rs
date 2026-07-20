@@ -90,6 +90,16 @@ fn to_skia_color(c: egui::Color32) -> skia_safe::Color {
     skia_safe::Color::from_argb(c.a(), c.r(), c.g(), c.b())
 }
 
+// Bundled font so export is deterministic and independent of system fonts.
+// Font::default() has no typeface, so draw_str would render nothing.
+const OPEN_SANS: &[u8] = include_bytes!("../assets/fonts/OpenSans-Regular.ttf");
+
+fn make_font(size: f32) -> Option<skia_safe::Font> {
+    let font_mgr = skia_safe::FontMgr::new();
+    let typeface = font_mgr.new_from_data(OPEN_SANS, None)?;
+    Some(skia_safe::Font::from_typeface(typeface, size))
+}
+
 fn draw_shape_to_skia(canvas: &skia_safe::Canvas, data: &ShapeData) -> Result<(), String> {
     match data {
         ShapeData::Pen { points, color, stroke_width } => {
@@ -145,11 +155,10 @@ fn draw_shape_to_skia(canvas: &skia_safe::Canvas, data: &ShapeData) -> Result<()
             paint.set_anti_alias(true);
             paint.set_color(to_skia_color(*color));
 
-            let mut font = skia_safe::Font::default();
-            font.set_size(*size);
-
-            // baseline offset approx size * 0.8 to match top-left positioning of egui
-            canvas.draw_str(text, (pos.x, pos.y + size * 0.8), &font, &paint);
+            if let Some(font) = make_font(*size) {
+                // baseline offset approx size * 0.8 to match top-left positioning of egui
+                canvas.draw_str(text, (pos.x, pos.y + size * 0.8), &font, &paint);
+            }
         }
         ShapeData::Image { rect, bytes, .. } => {
             if let Some(skia_img) = skia_safe::Image::from_encoded(skia_safe::Data::new_copy(bytes)) {
@@ -177,11 +186,10 @@ fn draw_shape_to_skia(canvas: &skia_safe::Canvas, data: &ShapeData) -> Result<()
             let mut text_paint = skia_safe::Paint::default();
             text_paint.set_anti_alias(true);
             text_paint.set_color(to_skia_color(*text_color));
-            let mut font = skia_safe::Font::default();
-            font.set_size(*text_size);
-
             let padding = 8.0;
-            canvas.draw_str(text, (rect.min.x + padding, rect.min.y + padding + text_size * 0.8), &font, &text_paint);
+            if let Some(font) = make_font(*text_size) {
+                canvas.draw_str(text, (rect.min.x + padding, rect.min.y + padding + text_size * 0.8), &font, &text_paint);
+            }
         }
         ShapeData::SectionBox { rect, color } => {
             let sk_rect = skia_safe::Rect::new(rect.min.x, rect.min.y, rect.max.x, rect.max.y);

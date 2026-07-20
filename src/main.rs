@@ -63,6 +63,123 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(Clone)]
+struct IconPair {
+    light: egui::TextureHandle,
+    dark: egui::TextureHandle,
+}
+
+#[derive(Clone)]
+struct Icons {
+    select: IconPair,
+    pen: IconPair,
+    rectangle: IconPair,
+    circle: IconPair,
+    text: IconPair,
+    note: IconPair,
+    section: IconPair,
+    import: IconPair,
+    undo: IconPair,
+    redo: IconPair,
+    clear: IconPair,
+    save: IconPair,
+    open: IconPair,
+    export: IconPair,
+    theme_dark: IconPair,
+    theme_light: IconPair,
+    settings: IconPair,
+    paintbrush: IconPair,
+    wallpaper: IconPair,
+}
+
+impl Icons {
+    fn new(ctx: &egui::Context) -> Self {
+        let load = |name: &str, bytes: &[u8]| -> IconPair {
+            let img = image::load_from_memory(bytes)
+                .expect("Failed to load icon from memory");
+            let rgba = img.to_rgba8();
+            let color_img_light = egui::ColorImage::from_rgba_unmultiplied(
+                [rgba.width() as usize, rgba.height() as usize],
+                &rgba.into_raw(),
+            );
+
+            let mut color_img_dark = color_img_light.clone();
+            for pixel in &mut color_img_dark.pixels {
+                *pixel = egui::Color32::from_rgba_unmultiplied(
+                    255 - pixel.r(),
+                    255 - pixel.g(),
+                    255 - pixel.b(),
+                    pixel.a(),
+                );
+            }
+
+            let light = ctx.load_texture(
+                format!("icon_light_{}", name),
+                color_img_light,
+                egui::TextureOptions {
+                    magnification: egui::TextureFilter::Linear,
+                    minification: egui::TextureFilter::Linear,
+                    mipmap_mode: Some(egui::TextureFilter::Linear),
+                    wrap_mode: egui::TextureWrapMode::ClampToEdge,
+                },
+            );
+
+            let dark = ctx.load_texture(
+                format!("icon_dark_{}", name),
+                color_img_dark,
+                egui::TextureOptions {
+                    magnification: egui::TextureFilter::Linear,
+                    minification: egui::TextureFilter::Linear,
+                    mipmap_mode: Some(egui::TextureFilter::Linear),
+                    wrap_mode: egui::TextureWrapMode::ClampToEdge,
+                },
+            );
+
+            IconPair { light, dark }
+        };
+
+        Self {
+            select: load("select", include_bytes!("../assets/icons/mouse-pointer-2.png")),
+            pen: load("pen", include_bytes!("../assets/icons/pen.png")),
+            rectangle: load("rectangle", include_bytes!("../assets/icons/rectangle-horizontal.png")),
+            circle: load("circle", include_bytes!("../assets/icons/circle.png")),
+            text: load("text", include_bytes!("../assets/icons/text-initial.png")),
+            note: load("note", include_bytes!("../assets/icons/sticky-note.png")),
+            section: load("section", include_bytes!("../assets/icons/square-dashed.png")),
+            import: load("import", include_bytes!("../assets/icons/import.png")),
+            undo: load("undo", include_bytes!("../assets/icons/undo.png")),
+            redo: load("redo", include_bytes!("../assets/icons/redo.png")),
+            clear: load("clear", include_bytes!("../assets/icons/trash.png")),
+            save: load("save", include_bytes!("../assets/icons/save.png")),
+            open: load("open", include_bytes!("../assets/icons/folder-open.png")),
+            export: load("export", include_bytes!("../assets/icons/file-down.png")),
+            theme_dark: load("theme_dark", include_bytes!("../assets/icons/moon.png")),
+            theme_light: load("theme_light", include_bytes!("../assets/icons/sun.png")),
+            settings: load("settings", include_bytes!("../assets/icons/settings.png")),
+            paintbrush: load("paintbrush", include_bytes!("../assets/icons/paintbrush.png")),
+            wallpaper: load("wallpaper", include_bytes!("../assets/icons/wallpaper.png")),
+        }
+    }
+
+    fn icon_button(&self, ui: &mut egui::Ui, pair: &IconPair, tooltip: &str) -> egui::Response {
+        let is_dark = ui.visuals().dark_mode;
+        let texture = if is_dark { &pair.dark } else { &pair.light };
+        let image = egui::Image::new(texture)
+            .fit_to_exact_size(egui::vec2(22.0, 22.0));
+        ui.add(egui::ImageButton::new(image).frame(false))
+            .on_hover_text(tooltip)
+    }
+
+    fn selectable_icon_button(&self, ui: &mut egui::Ui, selected: bool, pair: &IconPair, tooltip: &str) -> egui::Response {
+        let is_dark = ui.visuals().dark_mode;
+        let texture = if is_dark { &pair.dark } else { &pair.light };
+        let image = egui::Image::new(texture)
+            .fit_to_exact_size(egui::vec2(22.0, 22.0));
+        ui.add(egui::ImageButton::new(image).selected(selected).frame(false))
+            .on_hover_text(tooltip)
+    }
+}
+
 struct App {
     canvas: Canvas,
     tool: Tool,
@@ -111,6 +228,9 @@ struct App {
 
     // UI state
     top_panel_collapsed: bool,
+
+    // Icons
+    icons: Option<Icons>,
 }
 
 impl Default for App {
@@ -143,12 +263,36 @@ impl Default for App {
             dark_mode: true,
             style_applied: false,
             last_system_theme: None,
-            current_file_path: None,
+                        current_file_path: None,
             is_dirty: false,
             close_confirmed: false,
             top_panel_collapsed: false,
+            icons: None,
         }
     }
+}
+
+/// Install OpenSans as the global default font for both proportional and
+/// monospace families, matching the bundled font used on export.
+fn setup_custom_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "OpenSans".to_owned(),
+        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/OpenSans-Regular.ttf"
+        ))),
+    );
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .insert(0, "OpenSans".to_owned());
+    fonts
+        .families
+        .entry(egui::FontFamily::Monospace)
+        .or_default()
+        .insert(0, "OpenSans".to_owned());
+    ctx.set_fonts(fonts);
 }
 
 impl App {
@@ -198,6 +342,8 @@ impl App {
     }
 
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        setup_custom_fonts(&cc.egui_ctx);
+
         let system_theme = cc.egui_ctx.input(|i| i.raw.system_theme);
         let dark_mode = match system_theme {
             Some(egui::Theme::Light) => false,
@@ -213,6 +359,7 @@ impl App {
             dark_mode,
             last_system_theme: system_theme,
             top_panel_collapsed,
+            icons: Some(Icons::new(&cc.egui_ctx)),
             ..Self::default()
         };
 
@@ -351,6 +498,15 @@ impl App {
         )
     }
 
+    /// Canvas-space point where pasted content should land: current mouse
+    /// position, falling back to the viewport center when no pointer is known.
+    fn paste_target_canvas(&self, ctx: &egui::Context) -> egui::Pos2 {
+        let screen = ctx
+            .input(|i| i.pointer.latest_pos())
+            .unwrap_or_else(|| ctx.screen_rect().center());
+        self.screen_to_canvas(screen)
+    }
+
     fn canvas_to_screen(&self, canvas_pos: egui::Pos2) -> egui::Pos2 {
         egui::pos2(
             canvas_pos.x * self.zoom + self.pan_offset.x,
@@ -460,6 +616,7 @@ impl App {
         }
         None
     }
+
 }
 
 impl eframe::App for App {
@@ -548,7 +705,10 @@ impl eframe::App for App {
                 self.canvas.undo_history.clear();
                 self.is_dirty = true;
 
-                shape.data.translate(egui::vec2(20.0, 20.0));
+                // Move the pasted shape so its center lands under the cursor.
+                let target = self.paste_target_canvas(ctx);
+                let center = shape.data.get_bounds().center();
+                shape.data.translate(target - center);
                 shape.id = self.canvas.next_id;
                 self.canvas.next_id += 1;
                 shape.data.load_textures(ctx, shape.id);
@@ -594,6 +754,8 @@ impl eframe::App for App {
             ctx.set_style(style);
         }
 
+        let icons = self.icons.clone().expect("Icons not initialized");
+
         let is_dark = ctx.style().visuals.dark_mode;
         let panel_bg = if is_dark {
             egui::Color32::from_black_alpha(200)
@@ -625,12 +787,7 @@ impl eframe::App for App {
                     .show(ui, |ui| {
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
-                                let icon = if self.top_panel_collapsed {
-                                    "View"
-                                } else {
-                                    "Hide"
-                                };
-                                if ui.button(icon).clicked() {
+                                if icons.icon_button(ui, &icons.settings, if self.top_panel_collapsed { "Show Settings" } else { "Hide Settings" }).clicked() {
                                     self.top_panel_collapsed = !self.top_panel_collapsed;
                                 }
                             });
@@ -639,7 +796,10 @@ impl eframe::App for App {
                             }
                             ui.separator();
                             ui.horizontal(|ui| {
-                                ui.label("Bg Color:");
+                                let wallpaper_tex = if is_dark { &icons.wallpaper.dark } else { &icons.wallpaper.light };
+                                let wallpaper_image = egui::Image::new(wallpaper_tex)
+                                    .fit_to_exact_size(egui::vec2(18.0, 18.0));
+                                ui.add(wallpaper_image).on_hover_text("Background Color");
                                 egui::color_picker::color_edit_button_srgba(
                                     ui,
                                     &mut self.background_color,
@@ -650,11 +810,15 @@ impl eframe::App for App {
                             ui.separator();
                             ui.horizontal(|ui| {
                                 let theme_icon = if self.dark_mode {
-                                    "🌙 Dark"
+                                    &icons.theme_light
                                 } else {
-                                    "☀ Light"
+                                    &icons.theme_dark
                                 };
-                                if ui.button(theme_icon).clicked() {
+                                if icons.icon_button(
+                                    ui,
+                                    theme_icon,
+                                    if self.dark_mode { "Switch to Light Theme" } else { "Switch to Dark Theme" }
+                                ).clicked() {
                                     self.dark_mode = !self.dark_mode;
                                     // Smoothly toggle background color if default
                                     if self.dark_mode {
@@ -669,6 +833,7 @@ impl eframe::App for App {
                                             self.background_color = egui::Color32::from_gray(240);
                                         }
                                     }
+                                    self.style_applied = false;
                                 }
                                 if ui.button("Reset View").clicked() {
                                     self.zoom = 1.0;
@@ -691,28 +856,23 @@ impl eframe::App for App {
                     .inner_margin(egui::Margin::symmetric(14, 10))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            // Tools: (tool, full label, short label for compact mode)
+                            // Tools
                             let tools = [
-                                (Tool::Select, "Select", "Sel"),
-                                (Tool::Pen, "Pen", "Pen"),
-                                (Tool::Rectangle, "Rectangle", "Rect"),
-                                (Tool::Circle, "Circle", "Circ"),
-                                (Tool::Text, "Text", "Text"),
-                                (Tool::StickyNote, "Note", "Note"),
-                                (Tool::Section, "Section", "Sec"),
+                                (Tool::Select, &icons.select, "Select (V)"),
+                                (Tool::Pen, &icons.pen, "Pen (P)"),
+                                (Tool::Rectangle, &icons.rectangle, "Rectangle (R)"),
+                                (Tool::Circle, &icons.circle, "Circle (O)"),
+                                (Tool::Text, &icons.text, "Text (T)"),
+                                (Tool::StickyNote, &icons.note, "Sticky Note (N)"),
+                                (Tool::Section, &icons.section, "Section (F)"),
                             ];
                             if compact_toolbar {
-                                ui.spacing_mut().button_padding = egui::vec2(10.0, 8.0);
-                                ui.spacing_mut().item_spacing.x = 6.0;
+                                ui.spacing_mut().button_padding = egui::vec2(6.0, 6.0);
+                                ui.spacing_mut().item_spacing.x = 4.0;
                             }
-                            for &(t, label, short) in &tools {
+                            for &(t, icon_tex, tooltip) in &tools {
                                 let selected = self.tool == t;
-                                let widget: egui::WidgetText = if compact_toolbar {
-                                    egui::RichText::new(short).size(13.0).into()
-                                } else {
-                                    label.into()
-                                };
-                                if ui.selectable_label(selected, widget).clicked() {
+                                if icons.selectable_icon_button(ui, selected, icon_tex, tooltip).clicked() {
                                     self.tool = t;
                                     self.clear_selection();
                                     self.editing_text_index = None;
@@ -725,44 +885,47 @@ impl eframe::App for App {
 
                             ui.separator();
 
-                            if ui.button("🖼 Import").clicked() {
+                            if icons.icon_button(ui, &icons.import, "Import Image (I)").clicked() {
                                 self.import_image_dialog(ctx);
                             }
 
                             ui.separator();
 
                             // Colors & Properties
-                            ui.label("Size:");
+                            let paintbrush_tex = if is_dark { &icons.paintbrush.dark } else { &icons.paintbrush.light };
+                            let size_image = egui::Image::new(paintbrush_tex)
+                                .fit_to_exact_size(egui::vec2(18.0, 18.0));
+                            ui.add(size_image).on_hover_text("Stroke Size");
                             ui.add(
                                 egui::Slider::new(&mut self.stroke_width, 1.0..=20.0)
                                     .show_value(false),
                             );
 
-                            ui.label("Color:");
                             egui::color_picker::color_edit_button_srgba(
                                 ui,
                                 &mut self.selected_color,
                                 egui::color_picker::Alpha::Opaque,
-                            );
+                            )
+                            .on_hover_text("Stroke Color");
 
                             ui.checkbox(&mut self.filled_shapes, "Fill");
 
                             ui.separator();
 
                             // Undo / Redo
-                            if ui.button("⮪").clicked() {
+                            if icons.icon_button(ui, &icons.undo, "Undo (Cmd+Z)").clicked() {
                                 self.canvas.undo();
                                 self.clear_selection();
                                 self.editing_text_index = None;
                                 self.is_dirty = true;
                             }
-                            if ui.button("⮫").clicked() {
+                            if icons.icon_button(ui, &icons.redo, "Redo (Cmd+Y)").clicked() {
                                 self.canvas.redo();
                                 self.clear_selection();
                                 self.editing_text_index = None;
                                 self.is_dirty = true;
                             }
-                            if ui.button("🗑 Clear").clicked() {
+                            if icons.icon_button(ui, &icons.clear, "Clear Canvas").clicked() {
                                 self.canvas.clear();
                                 self.clear_selection();
                                 self.editing_text_index = None;
@@ -772,13 +935,13 @@ impl eframe::App for App {
                             ui.separator();
 
                             // File & Export
-                            if ui.button("💾 Save").clicked() {
+                            if icons.icon_button(ui, &icons.save, "Save Board (Cmd+S)").clicked() {
                                 self.save();
                             }
-                            if ui.button("📁 Open").clicked() {
+                            if icons.icon_button(ui, &icons.open, "Open Board (Cmd+O)").clicked() {
                                 self.open_file_dialog(ctx);
                             }
-                            if ui.button("📤 Export").clicked() {
+                            if icons.icon_button(ui, &icons.export, "Export Board (Cmd+E)").clicked() {
                                 self.show_export_dialog = true;
                             }
                         });
@@ -1857,8 +2020,7 @@ impl App {
                 ) {
                     let dynamic_img = image::DynamicImage::ImageRgba8(rgba);
                     if let Ok((compressed_bytes, size)) = self.compress_and_scale(dynamic_img) {
-                        let center_screen = ctx.screen_rect().center();
-                        let center_canvas = self.screen_to_canvas(center_screen);
+                        let center_canvas = self.paste_target_canvas(ctx);
                         let idx = self
                             .canvas
                             .add_image(center_canvas, compressed_bytes, size, ctx);
@@ -1888,8 +2050,7 @@ impl App {
                         let dynamic_img = image::DynamicImage::ImageRgba8(rgba);
                         match self.compress_and_scale(dynamic_img) {
                             Ok((compressed_bytes, size)) => {
-                                let center_screen = ctx.screen_rect().center();
-                                let center_canvas = self.screen_to_canvas(center_screen);
+                                let center_canvas = self.paste_target_canvas(ctx);
                                 let idx = self.canvas.add_image(
                                     center_canvas,
                                     compressed_bytes,
@@ -1928,8 +2089,7 @@ impl App {
                             if let Ok(img) = image::load_from_memory(&bytes) {
                                 match self.compress_and_scale(img) {
                                     Ok((compressed_bytes, size)) => {
-                                        let center_screen = ctx.screen_rect().center();
-                                        let center_canvas = self.screen_to_canvas(center_screen);
+                                        let center_canvas = self.paste_target_canvas(ctx);
                                         let idx = self.canvas.add_image(
                                             center_canvas,
                                             compressed_bytes,
@@ -1951,8 +2111,7 @@ impl App {
                     }
 
                     // Fallback to normal text label
-                    let center_screen = ctx.screen_rect().center();
-                    let center_canvas = self.screen_to_canvas(center_screen);
+                    let center_canvas = self.paste_target_canvas(ctx);
                     let idx = self
                         .canvas
                         .add_text(center_canvas, text, self.selected_color);
@@ -1988,8 +2147,7 @@ impl App {
                 if let Ok(img) = image::load_from_memory(&bytes) {
                     match self.compress_and_scale(img) {
                         Ok((compressed_bytes, size)) => {
-                            let center_screen = ctx.screen_rect().center();
-                            let center_canvas = self.screen_to_canvas(center_screen);
+                            let center_canvas = self.paste_target_canvas(ctx);
                             let idx =
                                 self.canvas
                                     .add_image(center_canvas, compressed_bytes, size, ctx);
