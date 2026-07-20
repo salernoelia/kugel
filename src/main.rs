@@ -623,13 +623,13 @@ impl eframe::App for App {
                         ui.horizontal(|ui| {
                             // Tools: (tool, full label, short label for compact mode)
                             let tools = [
-                                (Tool::Select, "➤ Select", "Sel"),
-                                (Tool::Pen, "✏ Pen", "Pen"),
-                                (Tool::Rectangle, "▭ Rect", "Rect"),
-                                (Tool::Circle, "○ Circle", "Circ"),
-                                (Tool::Text, "🖹 Text", "Text"),
-                                (Tool::StickyNote, "📝 Note", "Note"),
-                                (Tool::Section, "⬚ Section", "Sec"),
+                                (Tool::Select, "Select", "Sel"),
+                                (Tool::Pen, "Pen", "Pen"),
+                                (Tool::Rectangle, "Rectangle", "Rect"),
+                                (Tool::Circle, "Circle", "Circ"),
+                                (Tool::Text, "Text", "Text"),
+                                (Tool::StickyNote, "Note", "Note"),
+                                (Tool::Section, "Section", "Sec"),
                             ];
                             if compact_toolbar {
                                 ui.spacing_mut().button_padding = egui::vec2(10.0, 8.0);
