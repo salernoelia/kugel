@@ -73,6 +73,7 @@ struct IconPair {
 struct Icons {
     select: IconPair,
     pen: IconPair,
+    line: IconPair,
     rectangle: IconPair,
     circle: IconPair,
     text: IconPair,
@@ -141,6 +142,7 @@ impl Icons {
         Self {
             select: load("select", include_bytes!("../assets/icons/mouse-pointer-2.png")),
             pen: load("pen", include_bytes!("../assets/icons/pen.png")),
+            line: load("line", include_bytes!("../assets/icons/line.png")),
             rectangle: load("rectangle", include_bytes!("../assets/icons/rectangle-horizontal.png")),
             circle: load("circle", include_bytes!("../assets/icons/circle.png")),
             text: load("text", include_bytes!("../assets/icons/text-initial.png")),
@@ -203,6 +205,10 @@ struct App {
     // Copy / Paste buffer
     copied_shape: Option<Shape>,
 
+    // True while a single color-picker drag is recoloring the selection,
+    // so the whole drag collapses into one undo step.
+    recoloring_selection: bool,
+
     // Text editing state
     editing_text_index: Option<usize>,
     editing_text_buffer: String,
@@ -252,6 +258,7 @@ impl Default for App {
             drag_start_pos: egui::Pos2::ZERO,
             snap_correction: egui::Vec2::ZERO,
             copied_shape: None,
+            recoloring_selection: false,
             editing_text_index: None,
             editing_text_buffer: String::new(),
             show_export_dialog: false,
@@ -860,6 +867,7 @@ impl eframe::App for App {
                             let tools = [
                                 (Tool::Select, &icons.select, "Select (V)"),
                                 (Tool::Pen, &icons.pen, "Pen (P)"),
+                                (Tool::Line, &icons.line, "Line (L)"),
                                 (Tool::Rectangle, &icons.rectangle, "Rectangle (R)"),
                                 (Tool::Circle, &icons.circle, "Circle (O)"),
                                 (Tool::Text, &icons.text, "Text (T)"),
@@ -901,12 +909,32 @@ impl eframe::App for App {
                                     .show_value(false),
                             );
 
-                            egui::color_picker::color_edit_button_srgba(
+                            let color_resp = egui::color_picker::color_edit_button_srgba(
                                 ui,
                                 &mut self.selected_color,
                                 egui::color_picker::Alpha::Opaque,
                             )
                             .on_hover_text("Stroke Color");
+
+                            // Recolor any selected shapes live as the picker changes.
+                            if color_resp.changed() && !self.selected_shape_indices.is_empty() {
+                                if !self.recoloring_selection {
+                                    self.canvas.history.push(self.canvas.shapes.clone());
+                                    self.canvas.undo_history.clear();
+                                    self.recoloring_selection = true;
+                                }
+                                for &idx in &self.selected_shape_indices {
+                                    if let Some(shape) = self.canvas.shapes.get_mut(idx) {
+                                        shape.data.set_color(self.selected_color);
+                                    }
+                                }
+                                self.is_dirty = true;
+                            }
+                            if self.recoloring_selection
+                                && ui.input(|i| i.pointer.any_released())
+                            {
+                                self.recoloring_selection = false;
+                            }
 
                             ui.checkbox(&mut self.filled_shapes, "Fill");
 
@@ -1076,6 +1104,10 @@ impl eframe::App for App {
                         self.tool = Tool::Pen;
                         self.clear_selection();
                     }
+                    if bare_key(ui, egui::Key::L) {
+                        self.tool = Tool::Line;
+                        self.clear_selection();
+                    }
                     if bare_key(ui, egui::Key::R) {
                         self.tool = Tool::Rectangle;
                         self.clear_selection();
@@ -1119,6 +1151,9 @@ impl eframe::App for App {
                 }
                 if has_shortcut(ui, egui::Key::O, true) {
                     self.open_file_dialog(ctx);
+                }
+                if has_shortcut(ui, egui::Key::N, true) {
+                    self.new_board();
                 }
                 if has_shortcut(ui, egui::Key::E, true) {
                     self.show_export_dialog = true;
@@ -1560,25 +1595,27 @@ impl eframe::App for App {
                             if (self.tool == Tool::Text || self.tool == Tool::StickyNote)
                                 && response.clicked()
                             {
-                                if let Some(idx) = self.hit_test(canvas_pos) {
-                                    // Clicked existing shape: if it's text or sticky note, edit it
-                                    match &self.canvas.shapes[idx].data {
-                                        ShapeData::Text { text, .. } => {
-                                            self.editing_text_index = Some(idx);
-                                            self.editing_text_buffer = text.clone();
-                                            self.select_single(idx);
-                                            self.marquee_start = None;
-                                        }
-                                        ShapeData::StickyNote { text, .. } => {
-                                            self.editing_text_index = Some(idx);
-                                            self.editing_text_buffer = text.clone();
-                                            self.select_single(idx);
-                                            self.marquee_start = None;
-                                        }
-                                        _ => {}
-                                    }
+                                // Only edit-in-place when the click lands on an
+                                // existing text or sticky note; clicking any other
+                                // object (or empty space) starts a fresh one.
+                                let edit_existing = self.hit_test(canvas_pos).filter(|&idx| {
+                                    matches!(
+                                        self.canvas.shapes[idx].data,
+                                        ShapeData::Text { .. } | ShapeData::StickyNote { .. }
+                                    )
+                                });
+                                if let Some(idx) = edit_existing {
+                                    let text = match &self.canvas.shapes[idx].data {
+                                        ShapeData::Text { text, .. }
+                                        | ShapeData::StickyNote { text, .. } => text.clone(),
+                                        _ => String::new(),
+                                    };
+                                    self.editing_text_index = Some(idx);
+                                    self.editing_text_buffer = text;
+                                    self.select_single(idx);
+                                    self.marquee_start = None;
                                 } else {
-                                    // Clicked empty space: start new text or sticky note shape
+                                    // Empty space or a non-text object: start a new shape
                                     let edit_idx = self.canvas.start_shape(
                                         self.tool,
                                         canvas_pos,
@@ -2178,6 +2215,38 @@ impl App {
         } else {
             self.save_file_dialog()
         }
+    }
+
+    /// Start a fresh, empty board. Prompts to save the current one first if it
+    /// has unsaved changes.
+    fn new_board(&mut self) {
+        let empty_unsaved = self.canvas.shapes.is_empty() && self.current_file_path.is_none();
+        if self.is_dirty && !empty_unsaved {
+            let confirm = rfd::MessageDialog::new()
+                .set_title("Unsaved Changes")
+                .set_description("Do you want to save the current board before creating a new one?")
+                .set_buttons(rfd::MessageButtons::YesNoCancel)
+                .show();
+            match confirm {
+                rfd::MessageDialogResult::Yes => {
+                    // Abort if the save is cancelled or fails, keeping the board.
+                    if !self.save() {
+                        return;
+                    }
+                }
+                rfd::MessageDialogResult::No => {}
+                _ => return, // Cancel: keep the current board
+            }
+        }
+
+        self.canvas = Canvas::default();
+        self.current_file_path = None;
+        self.is_dirty = false;
+        self.clear_selection();
+        self.editing_text_index = None;
+        self.zoom = 1.0;
+        self.pan_offset = egui::Vec2::ZERO;
+        self.notification = Some(("New board created".to_string(), std::time::Instant::now()));
     }
 
     fn save_to_path(&mut self, path: &std::path::Path) -> bool {

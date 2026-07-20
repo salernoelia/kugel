@@ -121,6 +121,15 @@ fn draw_shape_to_skia(canvas: &skia_safe::Canvas, data: &ShapeData) -> Result<()
                 canvas.draw_path(&path, &paint);
             }
         }
+        ShapeData::Line { start, end, color, stroke_width } => {
+            let mut paint = skia_safe::Paint::default();
+            paint.set_anti_alias(true);
+            paint.set_style(skia_safe::paint::Style::Stroke);
+            paint.set_color(to_skia_color(*color));
+            paint.set_stroke_width(*stroke_width);
+            paint.set_stroke_cap(skia_safe::PaintCap::Round);
+            canvas.draw_line((start.x, start.y), (end.x, end.y), &paint);
+        }
         ShapeData::Rectangle { rect, color, stroke_width, filled } => {
             let sk_rect = skia_safe::Rect::new(rect.min.x, rect.min.y, rect.max.x, rect.max.y);
             let mut paint = skia_safe::Paint::default();

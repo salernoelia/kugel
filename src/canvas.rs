@@ -27,6 +27,10 @@ impl Canvas {
                 self.current_shape = Some(Shape::new_pen(self.next_id, vec![pos], color, width));
                 None
             }
+            Tool::Line => {
+                self.current_shape = Some(Shape::new_line(self.next_id, pos, pos, color, width));
+                None
+            }
             Tool::Rectangle => {
                 self.current_shape = Some(Shape::new_rect(
                     self.next_id,
@@ -110,6 +114,9 @@ impl Canvas {
                         *rect = egui::Rect::from_two_pos(start, pos);
                     }
                 }
+                ShapeData::Line { end, .. } => {
+                    *end = pos;
+                }
                 ShapeData::Circle { center, radius, .. } => {
                     *radius = center.distance(pos);
                 }
@@ -129,6 +136,7 @@ impl Canvas {
             // Verify shape has substance (e.g. pen has points)
             let keep = match &shape.data {
                 ShapeData::Pen { points, .. } => points.len() > 1,
+                ShapeData::Line { start, end, .. } => start.distance(*end) > 2.0,
                 ShapeData::Rectangle { rect, .. } => rect.width() > 1.0 || rect.height() > 1.0,
                 ShapeData::Circle { radius, .. } => *radius > 1.0,
                 ShapeData::SectionBox { rect, .. } => rect.width() > 5.0 && rect.height() > 5.0,

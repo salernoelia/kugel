@@ -4,6 +4,7 @@ use eframe::egui;
 pub enum Tool {
     Select,
     Pen,
+    Line,
     Rectangle,
     Circle,
     Text,
@@ -21,6 +22,12 @@ pub struct Shape {
 pub enum ShapeData {
     Pen {
         points: Vec<egui::Pos2>,
+        color: egui::Color32,
+        stroke_width: f32,
+    },
+    Line {
+        start: egui::Pos2,
+        end: egui::Pos2,
         color: egui::Color32,
         stroke_width: f32,
     },
@@ -79,6 +86,18 @@ impl Shape {
             id,
             data: ShapeData::Pen {
                 points,
+                color,
+                stroke_width,
+            },
+        }
+    }
+
+    pub fn new_line(id: usize, start: egui::Pos2, end: egui::Pos2, color: egui::Color32, stroke_width: f32) -> Self {
+        Self {
+            id,
+            data: ShapeData::Line {
+                start,
+                end,
                 color,
                 stroke_width,
             },
@@ -165,6 +184,7 @@ impl ShapeData {
     pub fn icon(&self) -> &str {
         match self {
             ShapeData::Pen { .. } => "✏ Pen",
+            ShapeData::Line { .. } => "╱ Line",
             ShapeData::Rectangle { .. } => "▭ Rect",
             ShapeData::Circle { .. } => "○ Circle",
             ShapeData::Text { .. } => "🖹 Text",
@@ -187,6 +207,7 @@ impl ShapeData {
                     rect
                 }
             }
+            ShapeData::Line { start, end, .. } => egui::Rect::from_two_pos(*start, *end),
             ShapeData::Rectangle { rect, .. } => *rect,
             ShapeData::Circle { center, radius, .. } => {
                 egui::Rect::from_center_size(*center, egui::Vec2::splat(radius * 2.0))
@@ -201,12 +222,31 @@ impl ShapeData {
         }
     }
 
+    /// Set the primary color of the shape. Sticky notes use their text color;
+    /// images have no color and are left unchanged.
+    pub fn set_color(&mut self, c: egui::Color32) {
+        match self {
+            ShapeData::Pen { color, .. }
+            | ShapeData::Line { color, .. }
+            | ShapeData::Rectangle { color, .. }
+            | ShapeData::Circle { color, .. }
+            | ShapeData::Text { color, .. }
+            | ShapeData::SectionBox { color, .. } => *color = c,
+            ShapeData::StickyNote { text_color, .. } => *text_color = c,
+            ShapeData::Image { .. } => {}
+        }
+    }
+
     pub fn translate(&mut self, delta: egui::Vec2) {
         match self {
             ShapeData::Pen { points, .. } => {
                 for p in points {
                     *p += delta;
                 }
+            }
+            ShapeData::Line { start, end, .. } => {
+                *start += delta;
+                *end += delta;
             }
             ShapeData::Rectangle { rect, .. } => {
                 *rect = rect.translate(delta);
@@ -237,6 +277,10 @@ impl ShapeData {
                     *p = sp(*p);
                 }
             }
+            ShapeData::Line { start, end, .. } => {
+                *start = sp(*start);
+                *end = sp(*end);
+            }
             ShapeData::Rectangle { rect, .. } => {
                 *rect = egui::Rect::from_min_max(sp(rect.min), sp(rect.max));
             }
@@ -251,7 +295,7 @@ impl ShapeData {
                 ..
             } => {
                 *pos = sp(*pos);
-                *size = (*size * factor).clamp(8.0, 200.0);
+                *size = (*size * factor).clamp(8.0, 800.0);
                 if let Some(mw) = max_width {
                     *mw *= factor;
                 }
@@ -323,6 +367,33 @@ impl ShapeData {
                     }
                 }
             }
+            ShapeData::Line { start, end, .. } => {
+                // Scale both endpoints within the bounding box, matching the
+                // corner-handle behaviour of pen strokes.
+                let w = bounds.width();
+                let h = bounds.height();
+                if w > 0.0 && h > 0.0 {
+                    let (ax, ay, sx, sy) = match handle_index {
+                        3 => (bounds.min.x, bounds.min.y,
+                              (mouse_pos.x - bounds.min.x).max(10.0) / w,
+                              (mouse_pos.y - bounds.min.y).max(10.0) / h),
+                        0 => (bounds.max.x, bounds.max.y,
+                              (bounds.max.x - mouse_pos.x).max(10.0) / w,
+                              (bounds.max.y - mouse_pos.y).max(10.0) / h),
+                        1 => (bounds.min.x, bounds.max.y,
+                              (mouse_pos.x - bounds.min.x).max(10.0) / w,
+                              (bounds.max.y - mouse_pos.y).max(10.0) / h),
+                        2 => (bounds.max.x, bounds.min.y,
+                              (bounds.max.x - mouse_pos.x).max(10.0) / w,
+                              (mouse_pos.y - bounds.min.y).max(10.0) / h),
+                        _ => (bounds.min.x, bounds.min.y, 1.0, 1.0),
+                    };
+                    for p in [start, end] {
+                        p.x = ax + (p.x - ax) * sx;
+                        p.y = ay + (p.y - ay) * sy;
+                    }
+                }
+            }
             ShapeData::Rectangle { rect, .. } => {
                 match handle_index {
                     3 => { // Bottom-Right
@@ -365,7 +436,7 @@ impl ShapeData {
                     _ => {
                         // Other handles: change font size
                         let change = (delta.x + delta.y) * 0.5;
-                        *size = (*size + change).clamp(8.0, 200.0);
+                        *size = (*size + change).clamp(8.0, 800.0);
                     }
                 }
             }
@@ -453,6 +524,10 @@ impl ShapeData {
                 }
                 false
             }
+            ShapeData::Line { start, end, stroke_width, .. } => {
+                let check_dist = (tolerance + stroke_width / 2.0).max(8.0);
+                dist_to_segment(point, *start, *end) <= check_dist
+            }
             ShapeData::Rectangle { rect, .. } => {
                 rect.expand(tolerance).contains(point)
             }
@@ -516,6 +591,10 @@ impl ShapeData {
                     let stroke = egui::Stroke::new(stroke_width * zoom, *color);
                     painter.add(egui::Shape::line(transformed_points, stroke));
                 }
+            }
+            ShapeData::Line { start, end, color, stroke_width } => {
+                let stroke = egui::Stroke::new(stroke_width * zoom, *color);
+                painter.line_segment([transform(*start), transform(*end)], stroke);
             }
             ShapeData::Rectangle { rect, color, stroke_width, filled } => {
                 let start = transform(rect.min);
