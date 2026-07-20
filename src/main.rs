@@ -628,16 +628,39 @@ impl eframe::App for App {
                     }
                 }
 
-                // Zoom camera updates (direct scroll wheel zoom)
+                // Trackpad two-finger scroll pans; mouse wheel (or cmd/ctrl+scroll) zooms.
+                // egui already routes cmd/ctrl+scroll and pinch into zoom_delta().
                 let scroll_delta = ui.input(|i| i.smooth_scroll_delta);
                 let zoom_delta = ui.input(|i| i.zoom_delta());
+                let (mut has_wheel, mut has_trackpad) = (false, false);
+                ui.input(|i| {
+                    for e in &i.events {
+                        if let egui::Event::MouseWheel {
+                            unit, modifiers, ..
+                        } = e
+                        {
+                            if modifiers.command || modifiers.ctrl {
+                                continue;
+                            }
+                            match unit {
+                                egui::MouseWheelUnit::Point => has_trackpad = true,
+                                _ => has_wheel = true,
+                            }
+                        }
+                    }
+                });
 
-                if zoom_delta != 1.0 || scroll_delta.y != 0.0 {
+                if has_trackpad && !has_wheel {
+                    self.pan_offset += scroll_delta;
+                }
+
+                let wheel_zoom = if has_wheel { scroll_delta.y } else { 0.0 };
+                if zoom_delta != 1.0 || wheel_zoom != 0.0 {
                     let pointer_pos = response.hover_pos().unwrap_or(response.rect.center());
                     let zoom_factor = if zoom_delta != 1.0 {
                         zoom_delta
                     } else {
-                        1.0 + scroll_delta.y * 0.003
+                        1.0 + wheel_zoom * 0.003
                     };
 
                     if zoom_factor != 1.0 {
