@@ -1,6 +1,6 @@
 [package]
 name = "kugel"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Elia Salerno"]
 description = "A minimalist, high performance mood board."
@@ -17,6 +17,13 @@ rfd = "0.15"
 image = { version = "0.25", features = ["png", "jpeg", "webp"] }
 base64 = "0.22"
 arboard = "3.4"
+
+# macOS: register an NSApplicationDelegate so double-clicked `.kugel` files
+# (delivered via the openFiles Apple Event, not argv) reach the app.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSString"] }
 
 [package.metadata.deb]
 maintainer = "Elia Salerno"

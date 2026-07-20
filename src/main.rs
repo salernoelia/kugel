@@ -1,5 +1,7 @@
 mod canvas;
 mod export;
+#[cfg(target_os = "macos")]
+mod macos_open;
 mod shapes;
 
 use canvas::Canvas;
@@ -10,6 +12,11 @@ use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 
 fn main() -> eframe::Result<()> {
+    // Must run on the main thread before the event loop starts so a
+    // double-click that cold-launches the app doesn't drop the open request.
+    #[cfg(target_os = "macos")]
+    macos_open::register();
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 800.0])
@@ -215,10 +222,26 @@ impl App {
         }
 
         // Check if a file path was passed as a command-line argument (for double-clicking files)
+        let mut opened = false;
         if let Some(path_str) = std::env::args().nth(1) {
             let path = std::path::Path::new(&path_str);
             if path.exists() && path.is_file() {
-                app.open_kugel_file(path, &cc.egui_ctx);
+                opened = app.open_kugel_file(path, &cc.egui_ctx);
+            }
+        }
+
+        // Otherwise reopen the most recently used board, if it still exists.
+        // (On macOS an explicit double-click arrives later via the openFiles
+        // Apple Event and will replace whatever we restore here.)
+        if !opened {
+            if let Some(path) = cc
+                .storage
+                .and_then(|s| eframe::get_value::<String>(s, "last_file_path"))
+            {
+                let path = std::path::PathBuf::from(path);
+                if path.is_file() {
+                    app.open_kugel_file(&path, &cc.egui_ctx);
+                }
             }
         }
 
@@ -335,6 +358,25 @@ impl App {
         )
     }
 
+    /// If a text shape's content is nothing but a single URL, return it
+    /// (normalized to an https:// prefix for bare `www.` links).
+    fn text_shape_url(&self, idx: usize) -> Option<String> {
+        let ShapeData::Text { text, .. } = &self.canvas.shapes.get(idx)?.data else {
+            return None;
+        };
+        let t = text.trim();
+        if t.is_empty() || t.split_whitespace().count() != 1 {
+            return None;
+        }
+        if t.starts_with("http://") || t.starts_with("https://") {
+            Some(t.to_string())
+        } else if t.starts_with("www.") {
+            Some(format!("https://{t}"))
+        } else {
+            None
+        }
+    }
+
     fn hit_test(&self, canvas_pos: egui::Pos2) -> Option<usize> {
         let tolerance = 5.0;
         for (idx, shape) in self.canvas.shapes.iter().enumerate().rev() {
@@ -423,12 +465,27 @@ impl App {
 impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, "top_panel_collapsed", &self.top_panel_collapsed);
+        if let Some(path) = &self.current_file_path {
+            eframe::set_value(storage, "last_file_path", &path.to_string_lossy().to_string());
+        }
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // macOS delivers double-clicked / "Open With" files via an Apple Event
+        // rather than argv; open whatever was queued since the last frame.
+        #[cfg(target_os = "macos")]
+        for path in macos_open::take_pending() {
+            if path.exists() && path.is_file() {
+                self.open_kugel_file(&path, ctx);
+            }
+        }
+
         // Handle window close request with unsaved changes prompt
         if ctx.input(|i| i.viewport().close_requested()) {
-            if self.close_confirmed || !self.is_dirty {
+            // A brand-new, never-saved board with nothing on it has nothing worth
+            // saving — don't nag on exit.
+            let empty_unsaved = self.canvas.shapes.is_empty() && self.current_file_path.is_none();
+            if self.close_confirmed || !self.is_dirty || empty_unsaved {
                 // Allow close
             } else {
                 // Intercept close
@@ -848,7 +905,7 @@ impl eframe::App for App {
                         })
                     };
 
-                    if bare_key(ui, egui::Key::V) {
+                    if bare_key(ui, egui::Key::V) || bare_key(ui, egui::Key::W) {
                         self.tool = Tool::Select;
                         self.clear_selection();
                     }
@@ -1161,10 +1218,29 @@ impl eframe::App for App {
                                 }
                             }
 
-                            // 2. Click to Deselect / Select fallback
+                            // Hint that a link-only text is clickable while Cmd/Ctrl is held.
+                            if response.hovered() {
+                                let cmd = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
+                                if cmd {
+                                    if let Some(idx) = self.hit_test(canvas_pos) {
+                                        if self.text_shape_url(idx).is_some() {
+                                            ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 2. Click to Deselect / Select fallback.
+                            //    Cmd/Ctrl+click on a link-only text opens it in the browser.
                             if response.clicked() {
                                 if let Some(idx) = self.hit_test(canvas_pos) {
-                                    self.select_single(idx);
+                                    let cmd = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
+                                    let url = if cmd { self.text_shape_url(idx) } else { None };
+                                    if let Some(url) = url {
+                                        ctx.open_url(egui::OpenUrl::new_tab(url));
+                                    } else {
+                                        self.select_single(idx);
+                                    }
                                     self.marquee_start = None;
                                 } else {
                                     self.clear_selection();

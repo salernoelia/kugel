@@ -23,10 +23,8 @@ Requires a recent Rust toolchain.
 ```bash
 git clone https://github.com/salernoelia/kugel
 cd kugel
-cargo run --release
+cargo bundle --release
 ```
-
-The release build is tuned for speed, so prefer `--release` for daily use.
 
 ## Controls
 
@@ -44,7 +42,7 @@ The release build is tuned for speed, so prefer `--release` for daily use.
 
 | Key | Tool |
 | --- | --- |
-| V | Select |
+| V or W | Select |
 | P | Pen |
 | R | Rectangle |
 | O | Circle |
@@ -68,11 +66,23 @@ The release build is tuned for speed, so prefer `--release` for daily use.
 | Arrow keys | Nudge selection (hold Shift for larger steps) |
 | Delete / Backspace | Delete selection |
 
-Double click a text or sticky note to edit it.
+Double click a text or sticky note to edit it. If a text is nothing but a link, Cmd/Ctrl + click it to open it in your browser.
+
+The most recently opened board reopens automatically on the next launch.
 
 ## File format
 
 Boards are plain JSON with a `.kugel` extension. They store shapes, background color, view state, and embedded image data, so a board file is self contained.
+
+## macOS file association
+
+To make `.kugel` files open with Kugel on double click (and show the Kugel icon), install the app bundle with:
+
+```bash
+./packaging/macos/install.sh
+```
+
+This builds `Kugel.app`, injects the `.kugel` document type into `Info.plist` (which `cargo bundle` omits), copies it to `/Applications`, and registers it with Launch Services.
 
 ## License
 
