@@ -1,6 +1,6 @@
 [package]
 name = "kugel"
-version = "0.1.10"
+version = "0.1.11"
 edition = "2021"
 authors = ["Elia Salerno"]
 description = "A minimalist, high performance mood board."
@@ -49,7 +49,7 @@ depends = "libx11-6, libxi6, libxtst6, libxinerama1, libxcursor1, libxrandr2, li
 name = "Kugel"
 identifier = "com.elia.kugel"
 icon = ["assets/icon.png", "assets/icon.icns"]
-version = "0.1.10"
+version = "0.1.11"
 copyright = "Copyright © 2026 Elia Salerno. All rights reserved."
 short_description = "A minimalist, high performance mood board."
 

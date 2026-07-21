@@ -1693,7 +1693,8 @@ impl eframe::App for App {
 
                 // Drag and drop images/boards pipeline
                 let dropped_files = ui.input(|i| i.raw.dropped_files.clone());
-                if !dropped_files.is_empty() {
+                let has_dropped_files = !dropped_files.is_empty();
+                if has_dropped_files {
                     // Split kugel boards (handled one at a time, may prompt) from
                     // image files (decoded + compressed in parallel below).
                     let mut image_paths: Vec<std::path::PathBuf> = Vec::new();
@@ -1826,7 +1827,8 @@ impl eframe::App for App {
                             let primary_pressed = ui.input(|i| i.pointer.primary_pressed());
                             let press_pos = ui.input(|i| i.pointer.press_origin());
 
-                            if primary_pressed
+                            if !has_dropped_files
+                                && primary_pressed
                                 && press_pos.is_some()
                                 && response.rect.contains(press_pos.unwrap())
                             {
@@ -1916,7 +1918,7 @@ impl eframe::App for App {
 
                             // 2. Click to Deselect / Select fallback.
                             //    Cmd/Ctrl+click on a link-only text opens it in the browser.
-                            if response.clicked() {
+                            if response.clicked() && !has_dropped_files {
                                 if let Some(idx) = self.hit_test(canvas_pos) {
                                     let cmd = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
                                     let shift = ui.input(|i| i.modifiers.shift);
@@ -2551,8 +2553,8 @@ impl App {
         let height = img.height();
         let short_side = width.min(height);
 
-        // Scale DOWN only — never enlarge. Cap short side to 450px for compact moodboard display
-        const MAX_SHORT_SIDE: u32 = 450;
+        // Scale DOWN only — never enlarge. Cap short side to 1200px for high quality detail
+        const MAX_SHORT_SIDE: u32 = 1200;
         let scaled_img = if short_side > MAX_SHORT_SIDE {
             let scale = MAX_SHORT_SIDE as f32 / short_side as f32;
             let new_w = (width as f32 * scale) as u32;
@@ -2566,15 +2568,13 @@ impl App {
         let out_h = scaled_img.height();
         let mut compressed_bytes = Vec::new();
 
-        // Opaque images -> JPEG (strong compression). Images with real
-        // transparency -> PNG, since JPEG can't carry an alpha channel.
         if scaled_img.color().has_alpha() && has_transparency(&scaled_img) {
             let encoder = image::codecs::png::PngEncoder::new(&mut compressed_bytes);
             scaled_img
                 .write_with_encoder(encoder)
                 .map_err(|e| e.to_string())?;
         } else {
-            const JPEG_QUALITY: u8 = 75;
+            const JPEG_QUALITY: u8 = 90;
             let rgb = scaled_img.to_rgb8();
             let mut encoder =
                 image::codecs::jpeg::JpegEncoder::new_with_quality(&mut compressed_bytes, JPEG_QUALITY);
@@ -2596,12 +2596,8 @@ impl App {
                 ) {
                     let dynamic_img = image::DynamicImage::ImageRgba8(rgba);
                     if let Ok((compressed_bytes, size)) = Self::compress_and_scale(dynamic_img) {
-                        let center_canvas = self.paste_target_canvas(ctx);
-                        let idx = self
-                            .canvas
-                            .add_image(center_canvas, compressed_bytes, size, ctx);
-                        self.select_single(idx);
-                        self.tool = Tool::Select;
+                        let target_canvas = self.paste_target_canvas(ctx);
+                        self.place_images_in_row(vec![(compressed_bytes, size)], target_canvas, ctx);
                         self.notification = Some((
                             "Pasted image from clipboard".to_string(),
                             std::time::Instant::now(),
@@ -2626,15 +2622,8 @@ impl App {
                         let dynamic_img = image::DynamicImage::ImageRgba8(rgba);
                         match Self::compress_and_scale(dynamic_img) {
                             Ok((compressed_bytes, size)) => {
-                                let center_canvas = self.paste_target_canvas(ctx);
-                                let idx = self.canvas.add_image(
-                                    center_canvas,
-                                    compressed_bytes,
-                                    size,
-                                    ctx,
-                                );
-                                self.select_single(idx);
-                                self.tool = Tool::Select;
+                                let target_canvas = self.paste_target_canvas(ctx);
+                                self.place_images_in_row(vec![(compressed_bytes, size)], target_canvas, ctx);
                                 self.notification = Some((
                                     "Pasted image from clipboard".to_string(),
                                     std::time::Instant::now(),
@@ -3229,6 +3218,12 @@ fn fetch_website_title(url: &str) -> Option<String> {
     }
 }
 
+/// Fit image raw dimensions into a compact display box on canvas
+fn fit_display_size(raw_size: [f32; 2], max_w: f32, max_h: f32) -> [f32; 2] {
+    let scale = (max_w / raw_size[0]).min(max_h / raw_size[1]).min(1.0);
+    [raw_size[0] * scale, raw_size[1] * scale]
+}
+
 /// Helper method to place a list of processed images in a single horizontal row,
 /// vertically centered at target_pos (e.g. mouse cursor position), with a very small tight gap.
 impl App {
@@ -3242,31 +3237,46 @@ impl App {
             return;
         }
 
+        // Compute compact display sizes for each image
+        let display_items: Vec<_> = images
+            .into_iter()
+            .map(|(bytes, sz)| {
+                let disp_sz = fit_display_size(sz, 200.0, 260.0);
+                (bytes, disp_sz)
+            })
+            .collect();
+
         // Very small, tight gap calculated dynamically relative to zoom level
         let gap = (4.0 / self.zoom).clamp(2.0, 8.0);
-        let total_width: f32 = images.iter().map(|(_, sz)| sz[0]).sum::<f32>()
-            + gap * (images.len().saturating_sub(1) as f32);
+        let total_width: f32 = display_items.iter().map(|(_, sz)| sz[0]).sum::<f32>()
+            + gap * (display_items.len().saturating_sub(1) as f32);
 
         let start_x = target_pos.x - (total_width / 2.0);
         let start_y = target_pos.y;
 
         self.clear_selection();
         let mut x_offset = 0.0;
-        for (compressed_bytes, size) in images {
-            let pos = egui::pos2(start_x + x_offset, start_y - (size[1] / 2.0));
-            let idx = self.canvas.add_image(pos, compressed_bytes, size, ctx);
+        let mut first_added = None;
+
+        for (compressed_bytes, size) in display_items {
+            let center_pos = egui::pos2(start_x + x_offset + size[0] / 2.0, start_y);
+            let idx = self.canvas.add_image(center_pos, compressed_bytes, size, ctx);
             self.selected_shape_indices.insert(idx);
-            self.primary_selected = Some(idx);
+            if first_added.is_none() {
+                first_added = Some(idx);
+            }
             x_offset += size[0] + gap;
         }
+
+        self.primary_selected = first_added;
         self.is_dirty = true;
         self.tool = Tool::Select;
+        ctx.request_repaint();
     }
 }
 
 /// Process a single file (PDF or Image) into a list of scaled image byte pairs.
 fn process_file_to_images(path: &std::path::Path) -> Vec<(Vec<u8>, [f32; 2])> {
-    let mut out = Vec::new();
     let ext = path
         .extension()
         .and_then(|s| s.to_str())
@@ -3275,23 +3285,33 @@ fn process_file_to_images(path: &std::path::Path) -> Vec<(Vec<u8>, [f32; 2])> {
     if ext.as_deref() == Some("pdf") {
         if let Ok(pdf_bytes) = std::fs::read(path) {
             if let Ok(page_images) = render_pdf_to_images(&pdf_bytes) {
-                for page_bytes in page_images {
-                    if let Ok(img) = image::load_from_memory(&page_bytes) {
-                        if let Ok(res) = App::compress_and_scale(img) {
-                            out.push(res);
-                        }
-                    }
-                }
+                // Decode and scale all PDF pages in parallel across CPU worker threads
+                let processed_pages: Vec<Option<(Vec<u8>, [f32; 2])>> = std::thread::scope(|s| {
+                    let handles: Vec<_> = page_images
+                        .into_iter()
+                        .map(|page_bytes| {
+                            s.spawn(move || {
+                                let img = image::load_from_memory(&page_bytes).ok()?;
+                                App::compress_and_scale(img).ok()
+                            })
+                        })
+                        .collect();
+                    handles.into_iter().map(|h| h.join().unwrap_or(None)).collect()
+                });
+                return processed_pages.into_iter().flatten().collect();
             }
         }
+        Vec::new()
     } else if let Ok(bytes) = std::fs::read(path) {
         if let Ok(img) = image::load_from_memory(&bytes) {
             if let Ok(res) = App::compress_and_scale(img) {
-                out.push(res);
+                return vec![res];
             }
         }
+        Vec::new()
+    } else {
+        Vec::new()
     }
-    out
 }
 
 /// Render pages of a PDF into individual PNG image bytes.
@@ -3302,11 +3322,11 @@ fn render_pdf_to_images(pdf_bytes: &[u8]) -> Result<Vec<Vec<u8>>, String> {
 
     let output_prefix = temp_dir.path().join("page");
 
-    // 1. Try pdftoppm (fast native page rendering)
+    // 1. Try pdftoppm (high quality native 1200px page rendering)
     let pdftoppm_res = std::process::Command::new("pdftoppm")
         .arg("-png")
         .arg("-scale-to-x")
-        .arg("500")
+        .arg("1200")
         .arg("-scale-to-y")
         .arg("-1")
         .arg(&pdf_path)
@@ -3482,6 +3502,30 @@ mod tests {
         assert_eq!(extract_trailing_number("page-1"), 1);
         assert_eq!(extract_trailing_number("page-2"), 2);
         assert_eq!(extract_trailing_number("page-10"), 10);
+    }
+
+    #[test]
+    fn test_fit_display_size() {
+        assert_eq!(fit_display_size([1200.0, 1600.0], 200.0, 260.0), [195.0, 260.0]);
+        assert_eq!(fit_display_size([100.0, 100.0], 200.0, 260.0), [100.0, 100.0]);
+    }
+
+    #[test]
+    fn test_place_images_in_row_selection() {
+        let mut app = App::default();
+        let ctx = egui::Context::default();
+        let images = vec![
+            (vec![1, 2, 3], [100.0, 100.0]),
+            (vec![4, 5, 6], [100.0, 100.0]),
+            (vec![7, 8, 9], [100.0, 100.0]),
+        ];
+        app.place_images_in_row(images, egui::pos2(0.0, 0.0), &ctx);
+        assert_eq!(app.selected_shape_indices.len(), 3);
+        assert!(app.selected_shape_indices.contains(&0));
+        assert!(app.selected_shape_indices.contains(&1));
+        assert!(app.selected_shape_indices.contains(&2));
+        assert_eq!(app.primary_selected, Some(0));
+        assert_eq!(app.tool, Tool::Select);
     }
 }
 

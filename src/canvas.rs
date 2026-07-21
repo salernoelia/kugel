@@ -159,11 +159,7 @@ impl Canvas {
 
         let w = size[0];
         let h = size[1];
-        let aspect = w / h;
-        let disp_w = w.min(400.0);
-        let disp_h = disp_w / aspect;
-
-        let rect = egui::Rect::from_center_size(pos, egui::vec2(disp_w, disp_h));
+        let rect = egui::Rect::from_center_size(pos, egui::vec2(w, h));
         let mut shape = Shape::new_image(self.next_id, rect, bytes, size, None);
         shape.data.load_textures(ctx, self.next_id);
 
