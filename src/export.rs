@@ -100,6 +100,54 @@ fn make_font(size: f32) -> Option<skia_safe::Font> {
     Some(skia_safe::Font::from_typeface(typeface, size))
 }
 
+fn wrap_text_to_lines(text: &str, font: &skia_safe::Font, max_width: Option<f32>) -> Vec<String> {
+    let mut lines = Vec::new();
+    for raw_line in text.split('\n') {
+        let raw_line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+        if let Some(mw) = max_width {
+            if mw > 0.0 {
+                let mut current_line = String::new();
+                let words: Vec<&str> = raw_line.split(' ').collect();
+                for word in words {
+                    if current_line.is_empty() {
+                        let (w, _) = font.measure_str(word, None);
+                        if w > mw {
+                            for ch in word.chars() {
+                                let mut test_str = current_line.clone();
+                                test_str.push(ch);
+                                let (test_w, _) = font.measure_str(&test_str, None);
+                                if test_w > mw && !current_line.is_empty() {
+                                    lines.push(current_line);
+                                    current_line = ch.to_string();
+                                } else {
+                                    current_line.push(ch);
+                                }
+                            }
+                        } else {
+                            current_line.push_str(word);
+                        }
+                    } else {
+                        let test_str = format!("{} {}", current_line, word);
+                        let (test_w, _) = font.measure_str(&test_str, None);
+                        if test_w > mw {
+                            lines.push(current_line);
+                            current_line = word.to_string();
+                        } else {
+                            current_line = test_str;
+                        }
+                    }
+                }
+                lines.push(current_line);
+            } else {
+                lines.push(raw_line.to_string());
+            }
+        } else {
+            lines.push(raw_line.to_string());
+        }
+    }
+    lines
+}
+
 fn draw_shape_to_skia(canvas: &skia_safe::Canvas, data: &ShapeData) -> Result<(), String> {
     match data {
         ShapeData::Pen { points, color, stroke_width } => {
@@ -159,7 +207,7 @@ fn draw_shape_to_skia(canvas: &skia_safe::Canvas, data: &ShapeData) -> Result<()
                 canvas.draw_circle((center.x, center.y), *radius, &paint);
             }
         }
-        ShapeData::Text { pos, text, color, size, link_title, .. } => {
+        ShapeData::Text { pos, text, color, size, max_width, link_title, .. } => {
             if let Some(lt) = link_title {
                 let mut title_paint = skia_safe::Paint::default();
                 title_paint.set_anti_alias(true);
@@ -173,8 +221,12 @@ fn draw_shape_to_skia(canvas: &skia_safe::Canvas, data: &ShapeData) -> Result<()
             paint.set_color(to_skia_color(*color));
 
             if let Some(font) = make_font(*size) {
-                // baseline offset approx size * 0.8 to match top-left positioning of egui
-                canvas.draw_str(text, (pos.x, pos.y + size * 0.8), &font, &paint);
+                let line_height = *size * 1.25;
+                let lines = wrap_text_to_lines(text, &font, *max_width);
+                for (i, line) in lines.iter().enumerate() {
+                    let y = pos.y + size * 0.8 + (i as f32 * line_height);
+                    canvas.draw_str(line, (pos.x, y), &font, &paint);
+                }
             }
         }
         ShapeData::Image { rect, bytes, .. } => {
@@ -212,8 +264,14 @@ fn draw_shape_to_skia(canvas: &skia_safe::Canvas, data: &ShapeData) -> Result<()
             text_paint.set_anti_alias(true);
             text_paint.set_color(to_skia_color(*text_color));
             let padding = 8.0;
+            let text_width = (rect.width() - padding * 2.0).max(10.0);
             if let Some(font) = make_font(*text_size) {
-                canvas.draw_str(text, (rect.min.x + padding, rect.min.y + padding + text_size * 0.8), &font, &text_paint);
+                let line_height = *text_size * 1.25;
+                let lines = wrap_text_to_lines(text, &font, Some(text_width));
+                for (i, line) in lines.iter().enumerate() {
+                    let y = rect.min.y + padding + text_size * 0.8 + (i as f32 * line_height);
+                    canvas.draw_str(line, (rect.min.x + padding, y), &font, &text_paint);
+                }
             }
         }
         ShapeData::SectionBox { rect, color } => {

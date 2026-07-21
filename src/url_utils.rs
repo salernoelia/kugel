@@ -1,3 +1,48 @@
+use eframe::egui;
+
+/// Try to extract a URL from a dropped file (checking bytes, file path, .webloc, .url files).
+pub fn extract_url_from_dropped_file(file: &egui::DroppedFile) -> Option<String> {
+    if let Some(bytes) = &file.bytes {
+        if let Ok(text) = std::str::from_utf8(bytes) {
+            if let Some(url) = extract_url(text) {
+                return Some(url);
+            }
+        }
+    }
+    if let Some(path) = &file.path {
+        if path.extension().map_or(false, |ext| ext == "webloc") {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                if let Some(start) = text.find("<string>") {
+                    if let Some(end) = text[start..].find("</string>") {
+                        let candidate = &text[start + 8..start + end];
+                        if let Some(url) = extract_url(candidate) {
+                            return Some(url);
+                        }
+                    }
+                }
+            }
+        }
+        if path.extension().map_or(false, |ext| ext == "url") {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                for line in text.lines() {
+                    let clean = line.trim();
+                    if clean.to_lowercase().starts_with("url=") {
+                        if let Some(url) = extract_url(&clean[4..]) {
+                            return Some(url);
+                        }
+                    }
+                }
+            }
+        }
+        if let Ok(text) = std::fs::read_to_string(path) {
+            if let Some(url) = extract_url(&text) {
+                return Some(url);
+            }
+        }
+    }
+    None
+}
+
 /// Extract the first URL found in text, if any.
 pub fn extract_url(text: &str) -> Option<String> {
     for word in text.trim().split_whitespace() {
@@ -160,5 +205,17 @@ mod tests {
             "Very Long Website..."
         );
         assert_eq!(truncate_title("   Spaces   ", 10), "Spaces");
+    }
+
+    #[test]
+    fn test_extract_url_from_dropped_file() {
+        let dropped = egui::DroppedFile {
+            bytes: Some(std::sync::Arc::new(*b"https://rust-lang.org")),
+            ..Default::default()
+        };
+        assert_eq!(
+            extract_url_from_dropped_file(&dropped),
+            Some("https://rust-lang.org".to_string())
+        );
     }
 }

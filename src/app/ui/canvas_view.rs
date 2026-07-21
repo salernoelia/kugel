@@ -1,6 +1,7 @@
 use crate::app::App;
 use crate::image_utils::process_file_to_images;
 use crate::shapes::{ShapeData, Tool};
+use crate::url_utils::extract_url_from_dropped_file;
 use eframe::egui;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -294,11 +295,18 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
                 }
             }
 
-            // Drag and drop files
+            // Drag and drop files & links
             let dropped_files = ui.input(|i| i.raw.dropped_files.clone());
             let has_dropped_files = !dropped_files.is_empty();
             if has_dropped_files {
+                let drop_pos = response
+                    .hover_pos()
+                    .or(response.interact_pointer_pos())
+                    .unwrap_or_else(|| response.rect.center());
+                let mut target_canvas = app.screen_to_canvas(drop_pos);
                 let mut image_paths: Vec<std::path::PathBuf> = Vec::new();
+                let mut links_added = 0;
+
                 for file in dropped_files {
                     if let Some(path) = &file.path {
                         if path.extension().map_or(false, |ext| ext == "kugel") {
@@ -328,10 +336,41 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
                             if proceed {
                                 app.open_kugel_file(path, ctx);
                             }
-                        } else {
-                            image_paths.push(path.clone());
+                            continue;
                         }
                     }
+
+                    if let Some(url) = extract_url_from_dropped_file(&file) {
+                        let idx = app.canvas.add_text(target_canvas, url, app.selected_color);
+                        if let Some(shape) = app.canvas.shapes.get_mut(idx) {
+                            if let ShapeData::Text { max_width, .. } = &mut shape.data {
+                                *max_width = Some(600.0);
+                            }
+                        }
+                        app.check_and_spawn_title_preview_for_shape(idx, ctx);
+                        app.is_dirty = true;
+                        app.select_single(idx);
+                        app.tool = Tool::Select;
+                        links_added += 1;
+                        target_canvas.x += 20.0;
+                        target_canvas.y += 20.0;
+                        continue;
+                    }
+
+                    if let Some(path) = &file.path {
+                        image_paths.push(path.clone());
+                    }
+                }
+
+                if links_added > 0 && image_paths.is_empty() {
+                    app.notification = Some((
+                        if links_added == 1 {
+                            "Pasted link onto canvas".to_string()
+                        } else {
+                            format!("Pasted {} links onto canvas", links_added)
+                        },
+                        Instant::now(),
+                    ));
                 }
 
                 if !image_paths.is_empty() {
@@ -350,7 +389,6 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
 
                     if !all_images.is_empty() {
                         let count = all_images.len();
-                        let target_canvas = app.paste_target_canvas(ctx);
                         app.place_images_in_row(all_images, target_canvas, ctx);
                         app.notification = Some((
                             if count == 1 {
@@ -360,6 +398,52 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
                             },
                             Instant::now(),
                         ));
+                    }
+                }
+            }
+
+            // Edge auto-panning while selecting or dragging
+            if ui.input(|i| i.pointer.primary_down())
+                && (app.marquee_start.is_some()
+                    || app.is_dragging_shape
+                    || app.is_resizing.is_some())
+            {
+                let latest_pointer = ui
+                    .input(|i| i.pointer.latest_pos())
+                    .or_else(|| response.hover_pos())
+                    .or_else(|| response.interact_pointer_pos());
+                if let Some(pos) = latest_pointer {
+                    let viewport = response.rect;
+                    let margin = 40.0;
+                    let mut pan_delta = egui::Vec2::ZERO;
+
+                    if pos.x < viewport.min.x + margin {
+                        let d = (viewport.min.x + margin) - pos.x;
+                        pan_delta.x += (d * 0.35).clamp(3.0, 35.0);
+                    } else if pos.x > viewport.max.x - margin {
+                        let d = pos.x - (viewport.max.x - margin);
+                        pan_delta.x -= (d * 0.35).clamp(3.0, 35.0);
+                    }
+
+                    if pos.y < viewport.min.y + margin {
+                        let d = (viewport.min.y + margin) - pos.y;
+                        pan_delta.y += (d * 0.35).clamp(3.0, 35.0);
+                    } else if pos.y > viewport.max.y - margin {
+                        let d = pos.y - (viewport.max.y - margin);
+                        pan_delta.y -= (d * 0.35).clamp(3.0, 35.0);
+                    }
+
+                    if pan_delta != egui::Vec2::ZERO {
+                        app.pan_offset += pan_delta;
+                        if app.is_dragging_shape {
+                            let canvas_shift = -pan_delta / app.zoom;
+                            for &idx in &app.selected_shape_indices {
+                                if idx < app.canvas.shapes.len() {
+                                    app.canvas.shapes[idx].data.translate(canvas_shift);
+                                }
+                            }
+                        }
+                        ctx.request_repaint();
                     }
                 }
             }

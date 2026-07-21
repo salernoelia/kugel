@@ -145,8 +145,19 @@ impl App {
         };
         let ext = if self.export_jpeg { "jpg" } else { "png" };
 
+        let default_name = if let Some(file_path) = &self.current_file_path {
+            file_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|stem| format!("{}.{}", stem, ext))
+                .unwrap_or_else(|| format!("Untitled.{}", ext))
+        } else {
+            format!("Untitled.{}", ext)
+        };
+
         if let Some(path) = rfd::FileDialog::new()
             .add_filter(filter_name, &[ext])
+            .set_file_name(&default_name)
             .save_file()
         {
             match export_canvas_to_image(
