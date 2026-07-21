@@ -159,7 +159,15 @@ fn draw_shape_to_skia(canvas: &skia_safe::Canvas, data: &ShapeData) -> Result<()
                 canvas.draw_circle((center.x, center.y), *radius, &paint);
             }
         }
-        ShapeData::Text { pos, text, color, size, .. } => {
+        ShapeData::Text { pos, text, color, size, link_title, .. } => {
+            if let Some(lt) = link_title {
+                let mut title_paint = skia_safe::Paint::default();
+                title_paint.set_anti_alias(true);
+                title_paint.set_color(skia_safe::Color::from_rgb(147, 197, 253));
+                if let Some(font) = make_font(13.0) {
+                    canvas.draw_str(lt, (pos.x, pos.y - 4.0), &font, &title_paint);
+                }
+            }
             let mut paint = skia_safe::Paint::default();
             paint.set_anti_alias(true);
             paint.set_color(to_skia_color(*color));
@@ -181,7 +189,15 @@ fn draw_shape_to_skia(canvas: &skia_safe::Canvas, data: &ShapeData) -> Result<()
                 );
             }
         }
-        ShapeData::StickyNote { rect, text, bg_color, text_color, text_size, .. } => {
+        ShapeData::StickyNote { rect, text, bg_color, text_color, text_size, link_title, .. } => {
+            if let Some(lt) = link_title {
+                let mut title_paint = skia_safe::Paint::default();
+                title_paint.set_anti_alias(true);
+                title_paint.set_color(skia_safe::Color::from_rgb(147, 197, 253));
+                if let Some(font) = make_font(13.0) {
+                    canvas.draw_str(lt, (rect.min.x, rect.min.y - 4.0), &font, &title_paint);
+                }
+            }
             let sk_rect = skia_safe::Rect::new(rect.min.x, rect.min.y, rect.max.x, rect.max.y);
             
             let mut bg_paint = skia_safe::Paint::default();

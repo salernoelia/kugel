@@ -198,6 +198,11 @@ enum UiEvent {
     UpdateCheckFailed(String),
     UpdateApplied,
     UpdateInstallFailed(String),
+    LinkTitleFetched {
+        shape_id: usize,
+        url: String,
+        title: String,
+    },
 }
 
 #[derive(Default, Clone)]
@@ -384,6 +389,7 @@ struct App {
     // Text editing state
     editing_text_index: Option<usize>,
     editing_text_buffer: String,
+    request_text_focus: bool,
 
     // Export overlay
     show_export_dialog: bool,
@@ -439,6 +445,7 @@ impl Default for App {
             recoloring_selection: false,
             editing_text_index: None,
             editing_text_buffer: String::new(),
+            request_text_focus: false,
             show_export_dialog: false,
             export_scale: 2.0,
             export_jpeg: false,
@@ -656,6 +663,14 @@ impl App {
                     self.notification =
                         Some((format!("Update failed: {err}"), std::time::Instant::now()));
                 }
+                UiEvent::LinkTitleFetched { shape_id, url, title } => {
+                    if let Some(shape) = self.canvas.shapes.iter_mut().find(|s| s.id == shape_id) {
+                        if shape.data.link_url() == Some(&url) {
+                            shape.data.set_link_title(Some(title));
+                            self.is_dirty = true;
+                        }
+                    }
+                }
             }
         }
     }
@@ -677,6 +692,7 @@ impl App {
                 self.canvas.load_textures(ctx);
                 self.clear_selection();
                 self.editing_text_index = None;
+                self.generate_missing_link_previews(ctx);
                 self.current_file_path = Some(path.to_path_buf());
                 self.is_dirty = false;
                 self.notification = Some((
@@ -1797,10 +1813,18 @@ impl eframe::App for App {
 
                             let marquee_box = egui::Rect::from_two_pos(start_canvas, end_canvas);
                             if marquee_box.width() > 2.0 && marquee_box.height() > 2.0 {
-                                // Select ALL shapes intersecting the marquee (not just frontmost)
+                                // Select ALL shapes intersecting the marquee, but frames (SectionBox)
+                                // are only selected if the marquee fully encloses the frame.
                                 self.clear_selection();
                                 for (idx, shape) in self.canvas.shapes.iter().enumerate() {
-                                    if marquee_box.intersects(shape.data.get_bounds()) {
+                                    let is_section = matches!(shape.data, ShapeData::SectionBox { .. });
+                                    let shape_bounds = shape.data.get_bounds();
+                                    let selected = if is_section {
+                                        marquee_box.contains_rect(shape_bounds)
+                                    } else {
+                                        marquee_box.intersects(shape_bounds)
+                                    };
+                                    if selected {
                                         self.selected_shape_indices.insert(idx);
                                         self.primary_selected = Some(idx);
                                     }
@@ -1830,6 +1854,20 @@ impl eframe::App for App {
                             {
                                 let click_pos = press_pos.unwrap();
                                 let click_canvas_pos = self.screen_to_canvas(click_pos);
+
+                                // If currently editing a note/text, stop editing if user clicked outside it
+                                if let Some(edit_idx) = self.editing_text_index {
+                                    let clicked_edited_shape = edit_idx < self.canvas.shapes.len()
+                                        && self.canvas.shapes[edit_idx]
+                                            .data
+                                            .contains_point(click_canvas_pos, 5.0);
+                                    if !clicked_edited_shape {
+                                        self.editing_text_index = None;
+                                        self.request_text_focus = false;
+                                        self.tool = Tool::Select;
+                                    }
+                                }
+
                                 let mut clicked_handle = false;
 
                                 if self.selected_shape_indices.len() > 1 {
@@ -1854,7 +1892,19 @@ impl eframe::App for App {
 
                                 if !clicked_handle {
                                     if let Some(idx) = self.hit_test(click_canvas_pos) {
-                                        if !self.selected_shape_indices.contains(&idx) {
+                                        let shift = ui.input(|i| i.modifiers.shift);
+                                        if shift {
+                                            if self.selected_shape_indices.contains(&idx) {
+                                                self.selected_shape_indices.remove(&idx);
+                                                if self.primary_selected == Some(idx) {
+                                                    self.primary_selected =
+                                                        self.selected_shape_indices.iter().next().copied();
+                                                }
+                                            } else {
+                                                self.selected_shape_indices.insert(idx);
+                                                self.primary_selected = Some(idx);
+                                            }
+                                        } else if !self.selected_shape_indices.contains(&idx) {
                                             self.select_single(idx);
                                         }
                                         if ui.input(|i| i.modifiers.alt) {
@@ -1866,7 +1916,9 @@ impl eframe::App for App {
                                         self.marquee_start = None;
                                     } else {
                                         // Clicking empty space: clear selection and start marquee
-                                        self.clear_selection();
+                                        if !ui.input(|i| i.modifiers.shift) {
+                                            self.clear_selection();
+                                        }
                                         self.marquee_start = Some(click_canvas_pos);
                                     }
                                 }
@@ -1889,14 +1941,15 @@ impl eframe::App for App {
                             if response.clicked() {
                                 if let Some(idx) = self.hit_test(canvas_pos) {
                                     let cmd = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
+                                    let shift = ui.input(|i| i.modifiers.shift);
                                     let url = if cmd { self.text_shape_url(idx) } else { None };
                                     if let Some(url) = url {
                                         ctx.open_url(egui::OpenUrl::new_tab(url));
-                                    } else {
+                                    } else if !shift {
                                         self.select_single(idx);
                                     }
                                     self.marquee_start = None;
-                                } else {
+                                } else if !ui.input(|i| i.modifiers.shift) {
                                     self.clear_selection();
                                 }
                             }
@@ -1912,13 +1965,17 @@ impl eframe::App for App {
                                         ShapeData::Text { text, .. } => {
                                             self.editing_text_index = Some(idx);
                                             self.editing_text_buffer = text.clone();
+                                            self.request_text_focus = true;
                                             self.select_single(idx);
+                                            self.tool = Tool::Select;
                                             self.marquee_start = None;
                                         }
                                         ShapeData::StickyNote { text, .. } => {
                                             self.editing_text_index = Some(idx);
                                             self.editing_text_buffer = text.clone();
+                                            self.request_text_focus = true;
                                             self.select_single(idx);
+                                            self.tool = Tool::Select;
                                             self.marquee_start = None;
                                         }
                                         _ => {}
@@ -2068,7 +2125,9 @@ impl eframe::App for App {
                                     };
                                     self.editing_text_index = Some(idx);
                                     self.editing_text_buffer = text;
+                                    self.request_text_focus = true;
                                     self.select_single(idx);
+                                    self.tool = Tool::Select;
                                     self.marquee_start = None;
                                 } else {
                                     // Empty space or a non-text object: start a new shape
@@ -2082,6 +2141,7 @@ impl eframe::App for App {
                                     if let Some(idx) = edit_idx {
                                         self.editing_text_index = Some(idx);
                                         self.editing_text_buffer = String::new();
+                                        self.request_text_focus = true;
                                         self.select_single(idx);
                                         self.tool = Tool::Select;
                                     }
@@ -2101,6 +2161,7 @@ impl eframe::App for App {
                                 if let Some(idx) = edit_idx {
                                     self.editing_text_index = Some(idx);
                                     self.editing_text_buffer = String::new();
+                                    self.request_text_focus = true;
                                     self.select_single(idx);
                                 }
                             }
@@ -2317,8 +2378,17 @@ impl eframe::App for App {
                         rect,
                         text_size,
                         text_color,
+                        bg_color,
                         ..
-                    } => (rect.min + egui::vec2(8.0, 8.0), *text_size, *text_color),
+                    } => {
+                        let dark_mode = ctx.style().visuals.dark_mode;
+                        let tc = if dark_mode && *bg_color == egui::Color32::from_rgb(255, 243, 176) {
+                            egui::Color32::from_rgb(245, 235, 205)
+                        } else {
+                            *text_color
+                        };
+                        (rect.min + egui::vec2(8.0, 8.0), *text_size, tc)
+                    }
                     _ => (egui::Pos2::ZERO, 24.0, egui::Color32::WHITE),
                 };
                 let screen_pos = self.canvas_to_screen(canvas_pos);
@@ -2368,7 +2438,10 @@ impl eframe::App for App {
                         }
 
                         let response = ui.add(text_edit);
-                        response.request_focus();
+                        if self.request_text_focus {
+                            response.request_focus();
+                            self.request_text_focus = false;
+                        }
 
                         // Live-update the canvas text as the user types
                         match &mut self.canvas.shapes[idx].data {
@@ -2380,6 +2453,7 @@ impl eframe::App for App {
                             }
                             _ => {}
                         }
+                        self.check_and_spawn_title_preview_for_shape(idx, ctx);
 
                         // Close editor on escape, lost focus, or cmd+enter
                         let pressed_esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
@@ -2406,6 +2480,7 @@ impl eframe::App for App {
                                 _ => {}
                             }
                             self.is_dirty = true;
+                            self.check_and_spawn_title_preview_for_shape(idx, ctx);
                             self.editing_text_index = None;
                             self.tool = Tool::Select;
                         }
@@ -2631,8 +2706,7 @@ impl App {
                         }
                     }
 
-                    // Fallback to normal text label. If the clipboard holds
-                    // Markdown, strip the syntax so the label is clean plain text.
+                    // Check if pasted text contains a web link for title preview
                     let label_text = if looks_like_markdown(&text) {
                         strip_markdown(&text)
                     } else {
@@ -2647,6 +2721,7 @@ impl App {
                             *max_width = Some(600.0);
                         }
                     }
+                    self.check_and_spawn_title_preview_for_shape(idx, ctx);
                     self.is_dirty = true;
                     self.select_single(idx);
                     self.tool = Tool::Select;
@@ -2667,6 +2742,56 @@ impl App {
                     std::time::Instant::now(),
                 ));
             }
+        }
+    }
+
+    fn generate_missing_link_previews(&mut self, ctx: &egui::Context) {
+        let count = self.canvas.shapes.len();
+        for idx in 0..count {
+            self.check_and_spawn_title_preview_for_shape(idx, ctx);
+        }
+    }
+
+    fn check_and_spawn_title_preview_for_shape(&mut self, shape_idx: usize, ctx: &egui::Context) {
+        if shape_idx >= self.canvas.shapes.len() {
+            return;
+        }
+        let shape = &mut self.canvas.shapes[shape_idx];
+        let text_content = match &shape.data {
+            ShapeData::Text { text, .. } | ShapeData::StickyNote { text, .. } => text.clone(),
+            _ => return,
+        };
+
+        let is_url = extract_url(&text_content);
+        if let Some(url) = is_url {
+            let current_url = shape.data.link_url().map(String::from);
+            if current_url != Some(url.clone()) {
+                shape.data.set_link_url(Some(url.clone()));
+                let fallback = format!("🌐 {}", truncate_title(&domain_fallback(&url), 55));
+                shape.data.set_link_title(Some(fallback));
+                self.is_dirty = true;
+
+                let shape_id = shape.id;
+                let ui_tx = self.ui_event_tx.clone();
+                let ctx_clone = ctx.clone();
+                let url_clone = url;
+
+                std::thread::spawn(move || {
+                    let raw_title = fetch_website_title(&url_clone)
+                        .unwrap_or_else(|| domain_fallback(&url_clone));
+                    let title = truncate_title(&raw_title, 55);
+                    let _ = ui_tx.send(UiEvent::LinkTitleFetched {
+                        shape_id,
+                        url: url_clone,
+                        title: format!("🌐 {title}"),
+                    });
+                    ctx_clone.request_repaint();
+                });
+            }
+        } else if shape.data.link_title().is_some() || shape.data.link_url().is_some() {
+            shape.data.set_link_title(None);
+            shape.data.set_link_url(None);
+            self.is_dirty = true;
         }
     }
 
@@ -3009,3 +3134,224 @@ fn do_self_update(download_url: &str) -> Result<(), String> {
 
     Ok(())
 }
+
+/// Extract the first URL found in text, if any.
+fn extract_url(text: &str) -> Option<String> {
+    for word in text.trim().split_whitespace() {
+        let clean = word.trim_matches(|c: char| {
+            c == '('
+                || c == ')'
+                || c == '<'
+                || c == '>'
+                || c == '"'
+                || c == '\''
+                || c == ','
+                || c == ';'
+                || c == '!'
+                || c == '?'
+        });
+        if clean.starts_with("http://") || clean.starts_with("https://") {
+            return Some(clean.to_string());
+        } else if clean.starts_with("www.") {
+            return Some(format!("https://{clean}"));
+        } else if clean.contains('.') && !clean.contains('@') && !clean.ends_with('.') {
+            let parts: Vec<&str> = clean.split('/').next().unwrap_or("").split('.').collect();
+            if parts.len() >= 2 {
+                let tld = parts.last().unwrap_or(&"");
+                if matches!(
+                    *tld,
+                    "com"
+                        | "org"
+                        | "net"
+                        | "io"
+                        | "dev"
+                        | "app"
+                        | "ai"
+                        | "co"
+                        | "uk"
+                        | "de"
+                        | "fr"
+                        | "it"
+                        | "es"
+                        | "ca"
+                        | "me"
+                        | "info"
+                        | "tech"
+                        | "xyz"
+                ) {
+                    return Some(format!("https://{clean}"));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Fallback domain name from a URL for immediate preview.
+fn domain_fallback(url: &str) -> String {
+    let clean = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_start_matches("www.");
+    let host = clean.split('/').next().unwrap_or(clean);
+    if host.is_empty() {
+        "website".to_string()
+    } else {
+        host.to_string()
+    }
+}
+
+/// Truncate a title to a maximum number of characters cleanly.
+fn truncate_title(title: &str, max_chars: usize) -> String {
+    let clean = title.trim();
+    if clean.chars().count() > max_chars {
+        let truncated: String = clean.chars().take(max_chars.saturating_sub(3)).collect();
+        format!("{}...", truncated.trim())
+    } else {
+        clean.to_string()
+    }
+}
+
+/// Fetch website HTML title in background thread.
+fn fetch_website_title(url: &str) -> Option<String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(4))
+        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .ok()?;
+
+    let response = client.get(url).send().ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let body = response.text().ok()?;
+
+    let lower_body = body.to_lowercase();
+    let start_idx = lower_body.find("<title")?;
+    let rest = &body[start_idx..];
+    let tag_end = rest.find('>')? + 1;
+    let content_rest = &rest[tag_end..];
+    let end_idx = content_rest.to_lowercase().find("</title")?;
+
+    let raw_title = &content_rest[..end_idx];
+    let cleaned = raw_title
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&nbsp;", " ")
+        .replace('\r', " ")
+        .replace('\n', " ");
+
+    let words: Vec<&str> = cleaned.split_whitespace().collect();
+    let title = words.join(" ");
+    if title.is_empty() {
+        None
+    } else {
+        Some(title)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_url() {
+        assert_eq!(
+            extract_url("Check out https://github.com/salernoelia/kugel!"),
+            Some("https://github.com/salernoelia/kugel".to_string())
+        );
+        assert_eq!(
+            extract_url("www.example.com/test"),
+            Some("https://www.example.com/test".to_string())
+        );
+        assert_eq!(
+            extract_url("Visit google.com for search"),
+            Some("https://google.com".to_string())
+        );
+        assert_eq!(extract_url("just plain text without link"), None);
+    }
+
+    #[test]
+    fn test_domain_fallback() {
+        assert_eq!(
+            domain_fallback("https://github.com/salernoelia/kugel"),
+            "github.com"
+        );
+        assert_eq!(
+            domain_fallback("https://www.news.ycombinator.com/item?id=123"),
+            "news.ycombinator.com"
+        );
+    }
+
+    #[test]
+    fn test_truncate_title() {
+        assert_eq!(truncate_title("Short Title", 20), "Short Title");
+        assert_eq!(
+            truncate_title("Very Long Website Title That Exceeds Limit", 20),
+            "Very Long Website..."
+        );
+    }
+
+    #[test]
+    fn test_shift_toggle_selection() {
+        let mut app = App::default();
+        app.canvas.add_text(egui::pos2(0.0, 0.0), "Item 1".into(), egui::Color32::WHITE);
+        app.canvas.add_text(egui::pos2(100.0, 100.0), "Item 2".into(), egui::Color32::WHITE);
+
+        // Select item 0
+        app.select_single(0);
+        assert!(app.selected_shape_indices.contains(&0));
+        assert!(!app.selected_shape_indices.contains(&1));
+
+        // Shift-add item 1
+        app.selected_shape_indices.insert(1);
+        assert!(app.selected_shape_indices.contains(&0));
+        assert!(app.selected_shape_indices.contains(&1));
+
+        // Shift-remove item 0 (deselect single shape)
+        app.selected_shape_indices.remove(&0);
+        assert!(!app.selected_shape_indices.contains(&0));
+        assert!(app.selected_shape_indices.contains(&1));
+    }
+
+    #[test]
+    fn test_link_preview_cleared_when_not_link() {
+        let mut app = App::default();
+        let ctx = egui::Context::default();
+        let idx = app.canvas.add_text(egui::pos2(0.0, 0.0), "https://github.com".into(), egui::Color32::WHITE);
+        app.check_and_spawn_title_preview_for_shape(idx, &ctx);
+        assert!(app.canvas.shapes[idx].data.link_title().is_some());
+
+        // Change text to non-link
+        if let ShapeData::Text { text, .. } = &mut app.canvas.shapes[idx].data {
+            *text = "Just plain text without a link".to_string();
+        }
+        app.check_and_spawn_title_preview_for_shape(idx, &ctx);
+        assert!(app.canvas.shapes[idx].data.link_title().is_none());
+        assert!(app.canvas.shapes[idx].data.link_url().is_none());
+    }
+
+    #[test]
+    fn test_link_preview_updated_when_url_changes() {
+        let mut app = App::default();
+        let ctx = egui::Context::default();
+        let idx = app.canvas.add_text(egui::pos2(0.0, 0.0), "https://github.com".into(), egui::Color32::WHITE);
+        app.check_and_spawn_title_preview_for_shape(idx, &ctx);
+        assert_eq!(app.canvas.shapes[idx].data.link_url(), Some("https://github.com"));
+
+        // Change text to different URL
+        if let ShapeData::Text { text, .. } = &mut app.canvas.shapes[idx].data {
+            *text = "https://wikipedia.org".to_string();
+        }
+        app.check_and_spawn_title_preview_for_shape(idx, &ctx);
+        assert_eq!(app.canvas.shapes[idx].data.link_url(), Some("https://wikipedia.org"));
+        assert!(app.canvas.shapes[idx].data.link_title().unwrap().contains("wikipedia.org"));
+    }
+}
+
+

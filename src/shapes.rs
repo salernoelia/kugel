@@ -97,6 +97,10 @@ pub enum ShapeData {
         size: f32,
         #[serde(default)]
         max_width: Option<f32>,
+        #[serde(default)]
+        link_title: Option<String>,
+        #[serde(default)]
+        link_url: Option<String>,
         #[serde(skip)]
         cached_size: Option<egui::Vec2>,
         #[serde(skip)]
@@ -116,6 +120,10 @@ pub enum ShapeData {
         bg_color: egui::Color32,
         text_color: egui::Color32,
         text_size: f32,
+        #[serde(default)]
+        link_title: Option<String>,
+        #[serde(default)]
+        link_url: Option<String>,
         #[serde(skip)]
         cached_height: Option<f32>,
         #[serde(skip)]
@@ -185,6 +193,8 @@ impl Shape {
                 color,
                 size,
                 max_width: None,
+                link_title: None,
+                link_url: None,
                 cached_size: None,
                 cache_key: None,
             },
@@ -212,6 +222,8 @@ impl Shape {
                 bg_color,
                 text_color,
                 text_size,
+                link_title: None,
+                link_url: None,
                 cached_height: None,
                 cache_key: None,
             },
@@ -241,6 +253,42 @@ impl ShapeData {
         }
     }
 
+    pub fn link_title(&self) -> Option<&str> {
+        match self {
+            ShapeData::Text { link_title, .. } | ShapeData::StickyNote { link_title, .. } => {
+                link_title.as_deref()
+            }
+            _ => None,
+        }
+    }
+
+    pub fn link_url(&self) -> Option<&str> {
+        match self {
+            ShapeData::Text { link_url, .. } | ShapeData::StickyNote { link_url, .. } => {
+                link_url.as_deref()
+            }
+            _ => None,
+        }
+    }
+
+    pub fn set_link_title(&mut self, title: Option<String>) {
+        match self {
+            ShapeData::Text { link_title, .. } | ShapeData::StickyNote { link_title, .. } => {
+                *link_title = title;
+            }
+            _ => {}
+        }
+    }
+
+    pub fn set_link_url(&mut self, url: Option<String>) {
+        match self {
+            ShapeData::Text { link_url, .. } | ShapeData::StickyNote { link_url, .. } => {
+                *link_url = url;
+            }
+            _ => {}
+        }
+    }
+
     pub fn get_bounds(&self) -> egui::Rect {
         match self {
             ShapeData::Pen { points, .. } => {
@@ -259,12 +307,22 @@ impl ShapeData {
             ShapeData::Circle { center, radius, .. } => {
                 egui::Rect::from_center_size(*center, egui::Vec2::splat(radius * 2.0))
             }
-            ShapeData::Text { pos, max_width, cached_size, .. } => {
+            ShapeData::Text { pos, max_width, cached_size, link_title, .. } => {
                 let size = cached_size.unwrap_or(egui::vec2(max_width.unwrap_or(100.0), 24.0));
-                egui::Rect::from_min_size(*pos, size)
+                let mut r = egui::Rect::from_min_size(*pos, size);
+                if link_title.is_some() {
+                    r.min.y -= 18.0;
+                }
+                r
             }
             ShapeData::Image { rect, .. } => *rect,
-            ShapeData::StickyNote { rect, .. } => *rect,
+            ShapeData::StickyNote { rect, link_title, .. } => {
+                let mut r = *rect;
+                if link_title.is_some() {
+                    r.min.y -= 18.0;
+                }
+                r
+            }
             ShapeData::SectionBox { rect, .. } => *rect,
         }
     }
@@ -658,11 +716,18 @@ impl ShapeData {
                 let stroke = egui::Stroke::new(stroke_width * zoom, *color);
                 painter.circle(center_transformed, radius_transformed, fill, stroke);
             }
-            ShapeData::Text { pos, text, color, size, max_width, .. } => {
+            ShapeData::Text { pos, text, color, size, max_width, link_title, .. } => {
+                let screen_pos = transform(*pos);
+                if let Some(lt) = link_title {
+                    let font_id = egui::FontId::proportional(13.0 * zoom);
+                    let title_pos = screen_pos - egui::vec2(0.0, 18.0 * zoom);
+                    let text_color = egui::Color32::from_rgb(147, 197, 253);
+                    let galley = painter.layout_no_wrap(lt.clone(), font_id, text_color);
+                    painter.galley(title_pos, galley, text_color);
+                }
                 if is_editing {
                     return;
                 }
-                let screen_pos = transform(*pos);
                 let font_id = egui::FontId::proportional(*size * zoom);
                 // Faux-bold: overdraw with a tiny horizontal offset to thicken glyphs.
                 let bold_offset = egui::vec2((0.4 * zoom).max(0.4), 0.0);
@@ -702,20 +767,44 @@ impl ShapeData {
                     );
                 }
             }
-            ShapeData::StickyNote { rect, text, bg_color, text_color, text_size, .. } => {
+            ShapeData::StickyNote { rect, text, bg_color, text_color, text_size, link_title, .. } => {
                 let start = transform(rect.min);
                 let end = transform(rect.max);
                 let transformed_rect = egui::Rect::from_two_pos(start, end);
+
+                if let Some(lt) = link_title {
+                    let font_id = egui::FontId::proportional(13.0 * zoom);
+                    let title_pos = transformed_rect.left_top() - egui::vec2(0.0, 18.0 * zoom);
+                    let text_color = egui::Color32::from_rgb(147, 197, 253);
+                    let galley = painter.layout_no_wrap(lt.clone(), font_id, text_color);
+                    painter.galley(title_pos, galley, text_color);
+                }
+                
+                let dark_mode = painter.ctx().style().visuals.dark_mode;
+                let (draw_bg, draw_text) = if dark_mode && *bg_color == egui::Color32::from_rgb(255, 243, 176) {
+                    (egui::Color32::from_rgb(38, 36, 28), egui::Color32::from_rgb(245, 235, 205))
+                } else {
+                    (*bg_color, *text_color)
+                };
+
                 // Draw filled rounded rect
-                painter.rect_filled(transformed_rect, 6.0 * zoom, *bg_color);
+                painter.rect_filled(transformed_rect, 6.0 * zoom, draw_bg);
+                if dark_mode {
+                    painter.rect_stroke(
+                        transformed_rect,
+                        6.0 * zoom,
+                        egui::Stroke::new(1.0 * zoom, egui::Color32::from_rgb(65, 60, 45)),
+                        egui::StrokeKind::Outside,
+                    );
+                }
                 // Draw text inside with padding
                 if !is_editing {
                     let padding = 8.0 * zoom;
                     let text_rect = transformed_rect.shrink(padding);
                     if text_rect.width() > 0.0 && text_rect.height() > 0.0 {
                         let font_id = egui::FontId::proportional(*text_size * zoom);
-                        let galley = painter.layout(text.clone(), font_id, *text_color, text_rect.width());
-                        painter.galley(text_rect.min.into(), galley, *text_color);
+                        let galley = painter.layout(text.clone(), font_id, draw_text, text_rect.width());
+                        painter.galley(text_rect.min.into(), galley, draw_text);
                     }
                 }
             }
