@@ -89,7 +89,7 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
 
                 if zoom_factor != 1.0 {
                     let old_zoom = app.zoom;
-                    app.zoom = (app.zoom * zoom_factor).clamp(0.5, 10.0);
+                    app.zoom = (app.zoom * zoom_factor).clamp(0.1, 10.0);
 
                     let zoom_change = app.zoom / old_zoom;
                     app.pan_offset = pointer_pos.to_vec2()

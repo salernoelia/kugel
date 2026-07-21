@@ -1,44 +1,115 @@
 use eframe::egui;
 
-/// Try to extract a URL from a dropped file (checking bytes, file path, .webloc, .url files).
+/// Try to extract a URL from a dropped file (checking name, bytes, file path, .webloc, .url files).
 pub fn extract_url_from_dropped_file(file: &egui::DroppedFile) -> Option<String> {
-    if let Some(bytes) = &file.bytes {
-        if let Ok(text) = std::str::from_utf8(bytes) {
-            if let Some(url) = extract_url(text) {
-                return Some(url);
-            }
-        }
+    // 1. Check file.name (browser drag & drop often sets file.name to the URL)
+    if let Some(url) = extract_url(&file.name) {
+        return Some(url);
     }
-    if let Some(path) = &file.path {
-        if path.extension().map_or(false, |ext| ext == "webloc") {
-            if let Ok(text) = std::fs::read_to_string(path) {
-                if let Some(start) = text.find("<string>") {
-                    if let Some(end) = text[start..].find("</string>") {
-                        let candidate = &text[start + 8..start + end];
-                        if let Some(url) = extract_url(candidate) {
-                            return Some(url);
-                        }
-                    }
-                }
-            }
-        }
-        if path.extension().map_or(false, |ext| ext == "url") {
-            if let Ok(text) = std::fs::read_to_string(path) {
-                for line in text.lines() {
-                    let clean = line.trim();
-                    if clean.to_lowercase().starts_with("url=") {
-                        if let Some(url) = extract_url(&clean[4..]) {
-                            return Some(url);
-                        }
-                    }
-                }
-            }
-        }
-        if let Ok(text) = std::fs::read_to_string(path) {
+
+    // 2. Check file.bytes (UTF-8, UTF-16, etc.)
+    if let Some(bytes) = &file.bytes {
+        if let Some(text) = decode_bytes_to_string(bytes) {
             if let Some(url) = extract_url(&text) {
                 return Some(url);
             }
         }
+    }
+
+    // 3. Check file.path
+    if let Some(path) = &file.path {
+        // If path itself is a URL string
+        if let Some(path_str) = path.to_str() {
+            if let Some(url) = extract_url(path_str) {
+                return Some(url);
+            }
+        }
+
+        let is_image_or_pdf = path.extension().map_or(false, |ext| {
+            let ext_str = ext.to_string_lossy().to_lowercase();
+            matches!(
+                ext_str.as_str(),
+                "png" | "jpg" | "jpeg" | "webp" | "gif" | "pdf" | "kugel"
+            )
+        });
+
+        if !is_image_or_pdf {
+            if path.extension().map_or(false, |ext| ext == "webloc") {
+                if let Ok(bytes) = std::fs::read(path) {
+                    if let Some(text) = decode_bytes_to_string(&bytes) {
+                        if let Some(start) = text.find("<string>") {
+                            if let Some(end) = text[start..].find("</string>") {
+                                let candidate = &text[start + 8..start + end];
+                                if let Some(url) = extract_url(candidate) {
+                                    return Some(url);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if path.extension().map_or(false, |ext| ext == "url") {
+                if let Ok(bytes) = std::fs::read(path) {
+                    if let Some(text) = decode_bytes_to_string(&bytes) {
+                        for line in text.lines() {
+                            let clean = line.trim();
+                            if clean.to_lowercase().starts_with("url=") {
+                                if let Some(url) = extract_url(&clean[4..]) {
+                                    return Some(url);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if let Ok(bytes) = std::fs::read(path) {
+                if let Some(text) = decode_bytes_to_string(&bytes) {
+                    if let Some(url) = extract_url(&text) {
+                        return Some(url);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn decode_bytes_to_string(bytes: &[u8]) -> Option<String> {
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        let clean = s.replace('\0', "");
+        if !clean.is_empty() {
+            return Some(clean);
+        }
+    }
+    if bytes.len() % 2 == 0 {
+        let u16s: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect();
+        if let Ok(s) = String::from_utf16(&u16s) {
+            let clean = s.replace('\0', "");
+            if !clean.is_empty() {
+                return Some(clean);
+            }
+        }
+        let u16s_be: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+            .collect();
+        if let Ok(s) = String::from_utf16(&u16s_be) {
+            let clean = s.replace('\0', "");
+            if !clean.is_empty() {
+                return Some(clean);
+            }
+        }
+    }
+    let cleaned: String = bytes
+        .iter()
+        .filter(|&&b| b != 0)
+        .map(|&b| b as char)
+        .collect();
+    if !cleaned.is_empty() {
+        return Some(cleaned);
     }
     None
 }
@@ -216,6 +287,31 @@ mod tests {
         assert_eq!(
             extract_url_from_dropped_file(&dropped),
             Some("https://rust-lang.org".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_url_from_dropped_file_name_and_utf16() {
+        let dropped_name = egui::DroppedFile {
+            name: "https://news.ycombinator.com".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            extract_url_from_dropped_file(&dropped_name),
+            Some("https://news.ycombinator.com".to_string())
+        );
+
+        let utf16_bytes: Vec<u8> = "https://example.com"
+            .encode_utf16()
+            .flat_map(|u| u.to_le_bytes())
+            .collect();
+        let dropped_utf16 = egui::DroppedFile {
+            bytes: Some(std::sync::Arc::from(utf16_bytes.into_boxed_slice())),
+            ..Default::default()
+        };
+        assert_eq!(
+            extract_url_from_dropped_file(&dropped_utf16),
+            Some("https://example.com".to_string())
         );
     }
 }
