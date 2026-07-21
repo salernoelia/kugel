@@ -1,70 +1,15 @@
+use crate::shapes::image_bytes;
+use crate::shapes::math::dist_to_segment;
 use eframe::egui;
+use serde::{Deserialize, Serialize};
 
-/// Serialize image bytes as a base64 string instead of a JSON array of u8.
-///
-/// A raw `Vec<u8>` serialized by `serde_json` becomes `[216, 255, ...]` — with
-/// pretty-printing that is ~6 chars per byte (~25 MB on disk for a 4 MB image).
-/// Base64 is ~1.33 chars per byte, an ~5x reduction. Deserialize accepts either
-/// form so boards saved by older versions (raw array) still load.
-mod image_bytes {
-    use base64::Engine;
-    use serde::de::{Deserializer, Error, SeqAccess, Visitor};
-    use serde::Serializer;
-    use std::fmt;
-
-    pub fn serialize<S: Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
-        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-        s.serialize_str(&encoded)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
-        struct BytesVisitor;
-
-        impl<'de> Visitor<'de> for BytesVisitor {
-            type Value = Vec<u8>;
-
-            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str("a base64 string or an array of bytes")
-            }
-
-            fn visit_str<E: Error>(self, v: &str) -> Result<Vec<u8>, E> {
-                base64::engine::general_purpose::STANDARD
-                    .decode(v)
-                    .map_err(E::custom)
-            }
-
-            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<u8>, A::Error> {
-                let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0));
-                while let Some(b) = seq.next_element::<u8>()? {
-                    out.push(b);
-                }
-                Ok(out)
-            }
-        }
-
-        d.deserialize_any(BytesVisitor)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
-pub enum Tool {
-    Select,
-    Pen,
-    Line,
-    Rectangle,
-    Circle,
-    Text,
-    StickyNote,
-    Section,
-}
-
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Shape {
     pub id: usize,
     pub data: ShapeData,
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum ShapeData {
     Pen {
         points: Vec<egui::Pos2>,
@@ -473,8 +418,6 @@ impl ShapeData {
                 }
             }
             ShapeData::Line { start, end, .. } => {
-                // Scale both endpoints within the bounding box, matching the
-                // corner-handle behaviour of pen strokes.
                 let w = bounds.width();
                 let h = bounds.height();
                 if w > 0.0 && h > 0.0 {
@@ -527,19 +470,16 @@ impl ShapeData {
                 }
             }
             ShapeData::Circle { center, radius, .. } => {
-                // Circle resize: radius changes relative to center based on handle distance
                 let dist = center.distance(mouse_pos);
                 *radius = dist.max(5.0);
             }
             ShapeData::Text { pos, size, max_width, .. } => {
                 match handle_index {
                     1 | 3 => {
-                        // Right-side handles: set max_width
                         let new_w = (mouse_pos.x - pos.x).max(30.0);
                         *max_width = Some(new_w);
                     }
                     _ => {
-                        // Other handles: change font size
                         let change = (delta.x + delta.y) * 0.5;
                         *size = (*size + change).clamp(8.0, 800.0);
                     }
@@ -566,7 +506,7 @@ impl ShapeData {
                     }
                     2 => { // Bottom-Left
                         let new_w = (rect.max.x - mouse_pos.x).max(10.0);
-                        let new_h = new_w / aspect;
+                        let new_h = (mouse_pos.y - rect.min.y).max(10.0);
                         rect.min.x = rect.max.x - new_w;
                         rect.max.y = rect.min.y + new_h;
                     }
@@ -575,7 +515,7 @@ impl ShapeData {
             }
             ShapeData::StickyNote { rect, text_size, .. } => {
                 match handle_index {
-                    1 | 3 => { // Right-side handles: adjust width and scale text size
+                    1 | 3 => {
                         let old_w = rect.width();
                         let new_w = (mouse_pos.x - rect.min.x).max(50.0);
                         if old_w > 0.0 {
@@ -651,8 +591,6 @@ impl ShapeData {
                 rect.expand(tolerance).contains(point)
             }
             ShapeData::SectionBox { rect, .. } => {
-                // Only the border is clickable; the interior is click-through so
-                // shapes underneath can be selected.
                 let band = tolerance.max(4.0);
                 rect.expand(band).contains(point) && !rect.shrink(band).contains(point)
             }
@@ -729,7 +667,6 @@ impl ShapeData {
                     return;
                 }
                 let font_id = egui::FontId::proportional(*size * zoom);
-                // Faux-bold: overdraw with a tiny horizontal offset to thicken glyphs.
                 let bold_offset = egui::vec2((0.4 * zoom).max(0.4), 0.0);
                 if let Some(mw) = max_width {
                     let wrap_width = mw * zoom;
@@ -787,7 +724,6 @@ impl ShapeData {
                     (*bg_color, *text_color)
                 };
 
-                // Draw filled rounded rect
                 painter.rect_filled(transformed_rect, 6.0 * zoom, draw_bg);
                 if dark_mode {
                     painter.rect_stroke(
@@ -797,7 +733,6 @@ impl ShapeData {
                         egui::StrokeKind::Outside,
                     );
                 }
-                // Draw text inside with padding
                 if !is_editing {
                     let padding = 8.0 * zoom;
                     let text_rect = transformed_rect.shrink(padding);
@@ -823,18 +758,6 @@ impl ShapeData {
     }
 }
 
-fn dist_to_segment(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
-    let ap = p - a;
-    let ab = b - a;
-    let ab_len_sq = ab.length_sq();
-    if ab_len_sq < 1e-6 {
-        return p.distance(a);
-    }
-    let t = (ap.dot(ab) / ab_len_sq).clamp(0.0, 1.0);
-    let projection = a + ab * t;
-    p.distance(projection)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -844,11 +767,8 @@ mod tests {
         let rect = egui::Rect::from_min_max(egui::pos2(10.0, 10.0), egui::pos2(50.0, 50.0));
         let shape = Shape::new_rect(1, rect, egui::Color32::RED, 2.0, false);
         
-        // Inside
         assert!(shape.data.contains_point(egui::pos2(30.0, 30.0), 2.0));
-        // On edge
         assert!(shape.data.contains_point(egui::pos2(10.0, 30.0), 2.0));
-        // Outside
         assert!(!shape.data.contains_point(egui::pos2(5.0, 30.0), 2.0));
     }
 
@@ -856,11 +776,8 @@ mod tests {
     fn test_circle_contains_point() {
         let shape = Shape::new_circle(1, egui::pos2(100.0, 100.0), 20.0, egui::Color32::BLUE, 2.0, false);
         
-        // Center
         assert!(shape.data.contains_point(egui::pos2(100.0, 100.0), 2.0));
-        // On boundary
         assert!(shape.data.contains_point(egui::pos2(120.0, 100.0), 2.0));
-        // Outside
         assert!(!shape.data.contains_point(egui::pos2(130.0, 100.0), 2.0));
     }
 
@@ -875,16 +792,35 @@ mod tests {
 
     #[test]
     fn test_image_resize_aspect_ratio() {
-        let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 50.0)); // Aspect ratio = 2.0
+        let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 50.0));
         let mut shape = Shape::new_image(1, rect, vec![], [100.0, 50.0], None);
         
-        // Resize dragging bottom-right handle (handle_index = 3)
-        // Move mouse to x=200. New width = 200. Aspect ratio 2.0 means new height = 100.
         shape.data.resize(3, egui::vec2(100.0, 100.0), egui::pos2(200.0, 200.0));
         
         let bounds = shape.data.get_bounds();
         assert_eq!(bounds.width(), 200.0);
         assert_eq!(bounds.height(), 100.0);
     }
-}
 
+    #[test]
+    fn test_section_box_contains_point_border_only() {
+        let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 100.0));
+        let shape = Shape::new_section(1, rect, egui::Color32::WHITE);
+
+        // Center of section box should be click-through (false)
+        assert!(!shape.data.contains_point(egui::pos2(50.0, 50.0), 4.0));
+        // Border should be clickable (true)
+        assert!(shape.data.contains_point(egui::pos2(1.0, 50.0), 4.0));
+    }
+
+    #[test]
+    fn test_shape_set_color() {
+        let mut rect = Shape::new_rect(1, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(10.0, 10.0)), egui::Color32::BLACK, 1.0, false);
+        rect.data.set_color(egui::Color32::GREEN);
+        if let ShapeData::Rectangle { color, .. } = rect.data {
+            assert_eq!(color, egui::Color32::GREEN);
+        } else {
+            panic!("Expected Rectangle");
+        }
+    }
+}
