@@ -299,10 +299,19 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
             let dropped_files = ui.input(|i| i.raw.dropped_files.clone());
             let has_dropped_files = !dropped_files.is_empty();
             if has_dropped_files {
-                let drop_pos = response
+                let pointer = response
                     .hover_pos()
                     .or(response.interact_pointer_pos())
-                    .unwrap_or_else(|| response.rect.center());
+                    .or_else(|| ui.input(|i| i.pointer.latest_pos()));
+                let drop_pos = if let Some(p) = pointer {
+                    if response.rect.contains(p) {
+                        p
+                    } else {
+                        response.rect.center()
+                    }
+                } else {
+                    response.rect.center()
+                };
                 let mut target_canvas = app.screen_to_canvas(drop_pos);
                 let mut image_paths: Vec<std::path::PathBuf> = Vec::new();
                 let mut links_added = 0;

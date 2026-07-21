@@ -135,9 +135,17 @@ impl App {
     /// Canvas-space point where pasted content should land: current mouse
     /// position, falling back to the viewport center when no pointer is known.
     pub fn paste_target_canvas(&self, ctx: &egui::Context) -> egui::Pos2 {
-        let screen = ctx
-            .input(|i| i.pointer.latest_pos())
-            .unwrap_or_else(|| ctx.screen_rect().center());
+        let pointer = ctx.input(|i| i.pointer.latest_pos().or(i.pointer.hover_pos()));
+        let screen_rect = ctx.screen_rect();
+        let screen = if let Some(p) = pointer {
+            if screen_rect.contains(p) {
+                p
+            } else {
+                screen_rect.center()
+            }
+        } else {
+            screen_rect.center()
+        };
         self.screen_to_canvas(screen)
     }
 
