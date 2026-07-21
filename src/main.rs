@@ -1751,12 +1751,12 @@ impl eframe::App for App {
                         if !all_images.is_empty() {
                             let count = all_images.len();
                             let target_canvas = self.paste_target_canvas(ctx);
-                            self.place_images_in_grid(all_images, target_canvas, ctx);
+                            self.place_images_in_row(all_images, target_canvas, ctx);
                             self.notification = Some((
                                 if count == 1 {
                                     "Imported image".to_string()
                                 } else {
-                                    format!("Imported {} images/pages", count)
+                                    format!("Imported {} images/pages in a row", count)
                                 },
                                 std::time::Instant::now(),
                             ));
@@ -2551,8 +2551,8 @@ impl App {
         let height = img.height();
         let short_side = width.min(height);
 
-        // Scale DOWN only — never enlarge. Cap the short side to 1200px
-        const MAX_SHORT_SIDE: u32 = 1200;
+        // Scale DOWN only — never enlarge. Cap short side to 450px for compact moodboard display
+        const MAX_SHORT_SIDE: u32 = 450;
         let scaled_img = if short_side > MAX_SHORT_SIDE {
             let scale = MAX_SHORT_SIDE as f32 / short_side as f32;
             let new_w = (width as f32 * scale) as u32;
@@ -2668,12 +2668,12 @@ impl App {
                     if !file_images.is_empty() {
                         let count = file_images.len();
                         let target_canvas = self.paste_target_canvas(ctx);
-                        self.place_images_in_grid(file_images, target_canvas, ctx);
+                        self.place_images_in_row(file_images, target_canvas, ctx);
                         self.notification = Some((
                             if count == 1 {
                                 "Pasted image/PDF page from clipboard".to_string()
                             } else {
-                                format!("Pasted {} images/PDF pages", count)
+                                format!("Pasted {} images/PDF pages in a row", count)
                             },
                             std::time::Instant::now(),
                         ));
@@ -3229,10 +3229,10 @@ fn fetch_website_title(url: &str) -> Option<String> {
     }
 }
 
-/// Helper method to place a list of processed images in a compact 2D grid,
-/// centered at target_pos (e.g. mouse cursor position), with tight gap between items.
+/// Helper method to place a list of processed images in a single horizontal row,
+/// vertically centered at target_pos (e.g. mouse cursor position), with a very small tight gap.
 impl App {
-    fn place_images_in_grid(
+    fn place_images_in_row(
         &mut self,
         images: Vec<(Vec<u8>, [f32; 2])>,
         target_pos: egui::Pos2,
@@ -3242,59 +3242,22 @@ impl App {
             return;
         }
 
-        let count = images.len();
-        let cols = match count {
-            1 => 1,
-            2 => 2,
-            3 => 3,
-            4 => 2,
-            5..=9 => 3,
-            _ => 4,
-        };
-
-        let gap = 12.0;
-        let rows = (count + cols - 1) / cols;
-        let mut col_widths = vec![0.0f32; cols];
-        let mut row_heights = vec![0.0f32; rows];
-
-        for (i, (_, sz)) in images.iter().enumerate() {
-            let r = i / cols;
-            let c = i % cols;
-            col_widths[c] = col_widths[c].max(sz[0]);
-            row_heights[r] = row_heights[r].max(sz[1]);
-        }
-
-        let total_width: f32 = col_widths.iter().sum::<f32>() + gap * (cols.saturating_sub(1) as f32);
-        let total_height: f32 = row_heights.iter().sum::<f32>() + gap * (rows.saturating_sub(1) as f32);
+        // Very small, tight gap calculated dynamically relative to zoom level
+        let gap = (4.0 / self.zoom).clamp(2.0, 8.0);
+        let total_width: f32 = images.iter().map(|(_, sz)| sz[0]).sum::<f32>()
+            + gap * (images.len().saturating_sub(1) as f32);
 
         let start_x = target_pos.x - (total_width / 2.0);
-        let start_y = target_pos.y - (total_height / 2.0);
-
-        let mut col_x = vec![0.0f32; cols];
-        let mut cur_x = start_x;
-        for c in 0..cols {
-            col_x[c] = cur_x;
-            cur_x += col_widths[c] + gap;
-        }
-
-        let mut row_y = vec![0.0f32; rows];
-        let mut cur_y = start_y;
-        for r in 0..rows {
-            row_y[r] = cur_y;
-            cur_y += row_heights[r] + gap;
-        }
+        let start_y = target_pos.y;
 
         self.clear_selection();
-        for (i, (compressed_bytes, size)) in images.into_iter().enumerate() {
-            let r = i / cols;
-            let c = i % cols;
-            let cell_x = col_x[c] + (col_widths[c] - size[0]) / 2.0;
-            let cell_y = row_y[r] + (row_heights[r] - size[1]) / 2.0;
-            let pos = egui::pos2(cell_x, cell_y);
-
+        let mut x_offset = 0.0;
+        for (compressed_bytes, size) in images {
+            let pos = egui::pos2(start_x + x_offset, start_y - (size[1] / 2.0));
             let idx = self.canvas.add_image(pos, compressed_bytes, size, ctx);
             self.selected_shape_indices.insert(idx);
             self.primary_selected = Some(idx);
+            x_offset += size[0] + gap;
         }
         self.is_dirty = true;
         self.tool = Tool::Select;
@@ -3339,11 +3302,11 @@ fn render_pdf_to_images(pdf_bytes: &[u8]) -> Result<Vec<Vec<u8>>, String> {
 
     let output_prefix = temp_dir.path().join("page");
 
-    // 1. Try pdftoppm (fast native 800px page rendering)
+    // 1. Try pdftoppm (fast native page rendering)
     let pdftoppm_res = std::process::Command::new("pdftoppm")
         .arg("-png")
         .arg("-scale-to-x")
-        .arg("800")
+        .arg("500")
         .arg("-scale-to-y")
         .arg("-1")
         .arg(&pdf_path)
