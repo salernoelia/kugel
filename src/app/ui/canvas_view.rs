@@ -196,6 +196,14 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
                 ));
             }
 
+            // Declutter selection into row (Shift + A)
+            if app.editing_text_index.is_none()
+                && has_shortcut(ui, egui::Key::A, false)
+                && ui.input(|i| i.modifiers.shift)
+            {
+                app.declutter_selection();
+            }
+
             // Duplicate selection (Cmd/Ctrl + D)
             if has_shortcut(ui, egui::Key::D, true) {
                 if let Some(&idx) = app.primary_selected.as_ref() {
@@ -439,6 +447,7 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
                                 if let Some(handle_idx) =
                                     app.group_handle_under_mouse(click_pos)
                                 {
+                                    app.canvas.push_history();
                                     app.is_resizing = Some(handle_idx);
                                     app.drag_start_pos = click_pos;
                                     clicked_handle = true;
@@ -448,6 +457,7 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
                                     if let Some(handle_idx) =
                                         app.get_handle_under_mouse(selected_idx, click_pos)
                                     {
+                                        app.canvas.push_history();
                                         app.is_resizing = Some(handle_idx);
                                         app.drag_start_pos = click_pos;
                                         clicked_handle = true;
@@ -475,6 +485,7 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
                                     if ui.input(|i| i.modifiers.alt) {
                                         app.duplicate_selection(ctx);
                                     }
+                                    app.canvas.push_history();
                                     app.is_dragging_shape = true;
                                     app.drag_start_pos = click_pos;
                                     app.snap_correction = egui::Vec2::ZERO;
@@ -521,17 +532,19 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
                         }) && response.hovered()
                         {
                             if let Some(idx) = app.hit_test(canvas_pos) {
-                                match &app.canvas.shapes[idx].data {
+                                let text_opt = match &app.canvas.shapes[idx].data {
                                     ShapeData::Text { text, .. }
-                                    | ShapeData::StickyNote { text, .. } => {
-                                        app.editing_text_index = Some(idx);
-                                        app.editing_text_buffer = text.clone();
-                                        app.request_text_focus = true;
-                                        app.select_single(idx);
-                                        app.tool = Tool::Select;
-                                        app.marquee_start = None;
-                                    }
-                                    _ => {}
+                                    | ShapeData::StickyNote { text, .. } => Some(text.clone()),
+                                    _ => None,
+                                };
+                                if let Some(text) = text_opt {
+                                    app.canvas.push_history();
+                                    app.editing_text_index = Some(idx);
+                                    app.editing_text_buffer = text;
+                                    app.request_text_focus = true;
+                                    app.select_single(idx);
+                                    app.tool = Tool::Select;
+                                    app.marquee_start = None;
                                 }
                             }
                         }
@@ -665,6 +678,7 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
                                     | ShapeData::StickyNote { text, .. } => text.clone(),
                                     _ => String::new(),
                                 };
+                                app.canvas.push_history();
                                 app.editing_text_index = Some(idx);
                                 app.editing_text_buffer = text;
                                 app.request_text_focus = true;

@@ -230,6 +230,60 @@ impl App {
         }
         None
     }
+
+    /// Declutter tool: Arrange selected shapes into a clean horizontal row
+    /// with the same top position (minimum min.y among selection) and a small regular gap.
+    pub fn declutter_selection(&mut self) {
+        if self.selected_shape_indices.len() < 2 {
+            return;
+        }
+
+        self.canvas.push_history();
+
+        let mut sorted_indices: Vec<usize> = self
+            .selected_shape_indices
+            .iter()
+            .copied()
+            .filter(|&idx| idx < self.canvas.shapes.len())
+            .collect();
+
+        if sorted_indices.len() < 2 {
+            return;
+        }
+
+        // Sort shapes left-to-right by their bounding box min.x
+        sorted_indices.sort_by(|&a, &b| {
+            let rect_a = self.canvas.shapes[a].data.get_bounds();
+            let rect_b = self.canvas.shapes[b].data.get_bounds();
+            rect_a.min.x.partial_cmp(&rect_b.min.x).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Find the top-most position (minimum min.y) among the selected shapes
+        let top_y = sorted_indices
+            .iter()
+            .map(|&idx| self.canvas.shapes[idx].data.get_bounds().min.y)
+            .fold(f32::INFINITY, f32::min);
+
+        let gap = 16.0;
+        let mut next_x = self.canvas.shapes[sorted_indices[0]].data.get_bounds().min.x;
+
+        for &idx in &sorted_indices {
+            let bounds = self.canvas.shapes[idx].data.get_bounds();
+            let delta_x = next_x - bounds.min.x;
+            let delta_y = top_y - bounds.min.y;
+
+            self.canvas.shapes[idx].data.translate(egui::vec2(delta_x, delta_y));
+
+            let new_bounds = self.canvas.shapes[idx].data.get_bounds();
+            next_x = new_bounds.max.x + gap;
+        }
+
+        self.is_dirty = true;
+        self.notification = Some((
+            format!("Decluttered {} shapes into row", sorted_indices.len()),
+            std::time::Instant::now(),
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -253,5 +307,46 @@ mod tests {
         app.selected_shape_indices.remove(&0);
         assert!(!app.selected_shape_indices.contains(&0));
         assert!(app.selected_shape_indices.contains(&1));
+    }
+
+    #[test]
+    fn test_declutter_selection() {
+        let mut app = App::default();
+        // Create 3 shapes scattered in space
+        let rect1 = egui::Rect::from_min_max(egui::pos2(200.0, 300.0), egui::pos2(300.0, 400.0)); // w=100
+        let rect2 = egui::Rect::from_min_max(egui::pos2(50.0, 500.0), egui::pos2(150.0, 600.0));  // w=100
+        let rect3 = egui::Rect::from_min_max(egui::pos2(400.0, 100.0), egui::pos2(500.0, 200.0)); // w=100
+
+        let idx0 = app.canvas.shapes.len();
+        app.canvas.shapes.push(crate::shapes::Shape::new_rect(1, rect1, egui::Color32::RED, 1.0, false));
+        let idx1 = app.canvas.shapes.len();
+        app.canvas.shapes.push(crate::shapes::Shape::new_rect(2, rect2, egui::Color32::BLUE, 1.0, false));
+        let idx2 = app.canvas.shapes.len();
+        app.canvas.shapes.push(crate::shapes::Shape::new_rect(3, rect3, egui::Color32::GREEN, 1.0, false));
+
+        app.selected_shape_indices.insert(idx0);
+        app.selected_shape_indices.insert(idx1);
+        app.selected_shape_indices.insert(idx2);
+
+        app.declutter_selection();
+
+        // Top y should be min(300, 500, 100) = 100
+        let b1 = app.canvas.shapes[idx1].data.get_bounds(); // originally min.x = 50 (leftmost)
+        let b0 = app.canvas.shapes[idx0].data.get_bounds(); // originally min.x = 200
+        let b2 = app.canvas.shapes[idx2].data.get_bounds(); // originally min.x = 400
+
+        assert_eq!(b1.min.y, 100.0);
+        assert_eq!(b0.min.y, 100.0);
+        assert_eq!(b2.min.y, 100.0);
+
+        assert_eq!(b1.min.x, 50.0);
+        assert_eq!(b0.min.x, 50.0 + 100.0 + 16.0); // 166.0
+        assert_eq!(b2.min.x, 166.0 + 100.0 + 16.0); // 282.0
+
+        // Test undo restores original scattered positions
+        app.canvas.undo();
+        assert_eq!(app.canvas.shapes[idx0].data.get_bounds().min, egui::pos2(200.0, 300.0));
+        assert_eq!(app.canvas.shapes[idx1].data.get_bounds().min, egui::pos2(50.0, 500.0));
+        assert_eq!(app.canvas.shapes[idx2].data.get_bounds().min, egui::pos2(400.0, 100.0));
     }
 }

@@ -217,6 +217,11 @@ impl Canvas {
         }
     }
 
+    pub fn push_history(&mut self) {
+        self.history.push(self.shapes.clone());
+        self.undo_history.clear();
+    }
+
     pub fn undo(&mut self) {
         if let Some(prev) = self.history.pop() {
             self.undo_history.push(self.shapes.clone());
