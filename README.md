@@ -2,27 +2,24 @@
 
 ![Demo](./assets/demo.png)
 
-A fast, minimalist white-board for the desktop. Drop images, sketch, drag things around, and lay out ideas on an infinite canvas. Built in Rust with egui and Skia.
-
-## Why?
-
-- Speed
-- File-based
-- Desktop
+A fast, minimalist mood board for the desktop. Drop images, render PDF pages, sketch, and lay out ideas on an infinite canvas. Built in Rust with egui and Skia.
 
 ## Features
 
-- Infinite canvas with pan, zoom, and an optional dot grid
-- Shapes: pen, rectangle, circle, text, sticky notes, and images
-- Section boxes: outline frames that stay out of the way. Their interior is click through, so you can still grab shapes underneath, and only the border is selectable
-- Select, move, and resize freely, with multi select and group resize
-- Alt and drag to duplicate
-- Alignment guides that snap edges and centers without sticking or drifting
-- Paste images straight from the clipboard, or drag and drop image files
-- Undo and redo
-- Save and load boards as `.kugel` files
-- Export the canvas to PNG or JPEG at a chosen resolution
-- Dark and light themes that follow the system setting
+- Infinite canvas with pan, zoom, and optional dot grid
+- Shapes: pen, line, rectangle, circle, text, sticky notes, and images
+- Section boxes: outline frames with click-through interiors so shapes inside remain selectable
+- PDF import: drag and drop PDF files to render all pages as a row of images
+- Image support: paste images from clipboard, drag and drop files, or import via file picker
+- Automatic link previews: extracts web links, fetches page titles in the background, and opens links with Cmd/Ctrl + click
+- Selection and transform: single select, marquee multi-select, Shift + click toggle, group resize, and Alt + drag duplicate
+- Declutter tool: Shift + A arranges selected elements into a neat horizontal row with uniform top alignment and spacing
+- Alignment snapping: smart guides snap edges and centers of moving shapes to existing elements
+- Full undo and redo history for all actions including drawing, moves, resizes, text edits, and decluttering
+- Save and load board state as self-contained `.kugel` files
+- Export canvas to PNG or JPEG at scalable resolutions
+- Dark and light themes that match system settings automatically
+- Automatic update checker and in-app updater
 
 ## Install
 
@@ -36,15 +33,15 @@ cargo bundle --release
 
 ## Controls
 
-### Mouse and trackpad
+### Mouse and Trackpad
 
-- Trackpad two finger scroll pans the canvas
-- Mouse wheel zooms toward the cursor
-- Cmd or Ctrl and scroll zooms on any device
-- Pinch zooms
+- Trackpad two-finger scroll to pan
+- Mouse wheel to zoom toward cursor
+- Cmd or Ctrl + scroll to zoom on any device
+- Pinch to zoom
 - Middle click drag, or hold Space and drag, to pan
-- Drag on empty space to marquee select
-- Drag a corner handle to resize, drag the group box to resize a selection together
+- Drag on empty space for marquee selection
+- Drag corner handle to resize a shape or group selection
 
 ### Tools
 
@@ -52,6 +49,7 @@ cargo bundle --release
 | --- | --- |
 | V or W | Select |
 | P | Pen |
+| L | Line |
 | R | Rectangle |
 | O | Circle |
 | T | Text |
@@ -59,38 +57,35 @@ cargo bundle --release
 | F | Section box |
 | I | Import image |
 
-### Editing
+### Editing Shortcuts
 
 | Shortcut | Action |
 | --- | --- |
 | Cmd/Ctrl + C | Copy |
 | Cmd/Ctrl + V | Paste (shape, image, or text) |
-| Cmd/Ctrl + D | Duplicate |
+| Cmd/Ctrl + D | Duplicate selection |
+| Shift + A | Declutter selection into a row |
 | Cmd/Ctrl + Z | Undo |
 | Cmd/Ctrl + Y | Redo |
-| Cmd/Ctrl + S | Save |
-| Cmd/Ctrl + O | Open |
-| Cmd/Ctrl + E | Export |
+| Cmd/Ctrl + S | Save board |
+| Cmd/Ctrl + O | Open board |
+| Cmd/Ctrl + E | Export image |
 | Arrow keys | Nudge selection (hold Shift for larger steps) |
 | Delete / Backspace | Delete selection |
 
-Double click a text or sticky note to edit it. If a text is nothing but a link, Cmd/Ctrl + click it to open it in your browser.
+Double click a text or sticky note to edit it.
 
-The most recently opened board reopens automatically on the next launch.
+## File Format
 
-## File format
+Boards are stored as plain JSON files with a `.kugel` extension. They store shapes, background color, view settings, and base64-encoded image data so board files are completely self-contained.
 
-Boards are plain JSON with a `.kugel` extension. They store shapes, background color, view state, and embedded image data, so a board file is self contained.
+## macOS File Association
 
-## macOS file association
-
-To make `.kugel` files open with Kugel on double click (and show the Kugel icon), install the app bundle with:
+To associate `.kugel` files with Kugel on double click, run:
 
 ```bash
 ./packaging/macos/install.sh
 ```
-
-This builds `Kugel.app`, injects the `.kugel` document type into `Info.plist` (which `cargo bundle` omits), copies it to `/Applications`, and registers it with Launch Services.
 
 ## License
 
