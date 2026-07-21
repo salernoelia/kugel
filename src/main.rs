@@ -1734,51 +1734,30 @@ impl eframe::App for App {
                     }
 
                     if !image_paths.is_empty() {
-                        // Decode + resize + JPEG-encode is CPU-bound and slow per
-                        // image. Run one worker thread per file so a multi-image
-                        // drop finishes in ~one image's time instead of the sum.
-                        let results: Vec<Option<(Vec<u8>, [f32; 2])>> = std::thread::scope(|s| {
+                        // Process PDF files (multi-page) and image files in parallel threads
+                        let all_images: Vec<(Vec<u8>, [f32; 2])> = std::thread::scope(|s| {
                             let handles: Vec<_> = image_paths
                                 .iter()
                                 .map(|path| {
-                                    s.spawn(move || {
-                                        let bytes = std::fs::read(path).ok()?;
-                                        let img = image::load_from_memory(&bytes).ok()?;
-                                        Self::compress_and_scale(img).ok()
-                                    })
+                                    s.spawn(move || process_file_to_images(path))
                                 })
                                 .collect();
-                            handles.into_iter().map(|h| h.join().unwrap_or(None)).collect()
+                            handles
+                                .into_iter()
+                                .flat_map(|h| h.join().unwrap_or_default())
+                                .collect()
                         });
 
-                        let center_screen = ctx.screen_rect().center();
-                        let center_canvas = self.screen_to_canvas(center_screen);
-                        let mut last_idx = None;
-                        let mut count = 0;
-                        for result in results {
-                            if let Some((compressed_bytes, size)) = result {
-                                // Cascade multiple drops so they don't stack exactly.
-                                let offset = egui::vec2(20.0 * count as f32, 20.0 * count as f32);
-                                let idx = self.canvas.add_image(
-                                    center_canvas + offset,
-                                    compressed_bytes,
-                                    size,
-                                    ctx,
-                                );
-                                last_idx = Some(idx);
-                                count += 1;
-                            }
-                        }
-
-                        if let Some(idx) = last_idx {
-                            self.is_dirty = true;
-                            self.select_single(idx);
-                            self.tool = Tool::Select;
+                        if !all_images.is_empty() {
+                            let count = all_images.len();
+                            let center_screen = ctx.screen_rect().center();
+                            let center_canvas = self.screen_to_canvas(center_screen);
+                            self.place_images_in_row(all_images, center_canvas, ctx);
                             self.notification = Some((
                                 if count == 1 {
                                     "Imported image".to_string()
                                 } else {
-                                    format!("Imported {} images", count)
+                                    format!("Imported {} images/pages side-by-side", count)
                                 },
                                 std::time::Instant::now(),
                             ));
@@ -2669,41 +2648,35 @@ impl App {
                         }
                     }
                 } else if let Ok(text) = clipboard.get_text() {
-                    // Check if text is a file path or file:// URL (commonly copied from Finder/Explorer)
-                    let clean_text = text.trim();
-                    let path_str = if clean_text.starts_with("file://") {
-                        clean_text.strip_prefix("file://").unwrap_or(clean_text)
-                    } else {
-                        clean_text
-                    };
-
-                    let decoded_path = path_str.replace("%20", " ");
-                    let path = std::path::Path::new(&decoded_path);
-
-                    if path.exists() && path.is_file() {
-                        if let Ok(bytes) = std::fs::read(path) {
-                            if let Ok(img) = image::load_from_memory(&bytes) {
-                                match Self::compress_and_scale(img) {
-                                    Ok((compressed_bytes, size)) => {
-                                        let center_canvas = self.paste_target_canvas(ctx);
-                                        let idx = self.canvas.add_image(
-                                            center_canvas,
-                                            compressed_bytes,
-                                            size,
-                                            ctx,
-                                        );
-                                        self.select_single(idx);
-                                        self.tool = Tool::Select;
-                                        self.notification = Some((
-                                            "Pasted image file from clipboard".to_string(),
-                                            std::time::Instant::now(),
-                                        ));
-                                        return;
-                                    }
-                                    Err(_) => {}
-                                }
-                            }
+                    // Check if text contains file path(s) (e.g. copied PDF or image files from Finder/Explorer)
+                    let mut file_images = Vec::new();
+                    for line in text.lines() {
+                        let clean = line.trim();
+                        let path_str = if clean.starts_with("file://") {
+                            clean.strip_prefix("file://").unwrap_or(clean)
+                        } else {
+                            clean
+                        };
+                        let decoded = path_str.replace("%20", " ");
+                        let p = std::path::Path::new(&decoded);
+                        if p.exists() && p.is_file() {
+                            file_images.extend(process_file_to_images(p));
                         }
+                    }
+
+                    if !file_images.is_empty() {
+                        let count = file_images.len();
+                        let center_canvas = self.paste_target_canvas(ctx);
+                        self.place_images_in_row(file_images, center_canvas, ctx);
+                        self.notification = Some((
+                            if count == 1 {
+                                "Pasted image/PDF page from clipboard".to_string()
+                            } else {
+                                format!("Pasted {} images/PDF pages side-by-side", count)
+                            },
+                            std::time::Instant::now(),
+                        ));
+                        return;
                     }
 
                     // Check if pasted text contains a web link for title preview
@@ -3255,6 +3228,152 @@ fn fetch_website_title(url: &str) -> Option<String> {
     }
 }
 
+/// Helper method to place a list of processed images side-by-side in a clean row,
+/// vertically centered at target_center, with a gap between images.
+impl App {
+    fn place_images_in_row(
+        &mut self,
+        images: Vec<(Vec<u8>, [f32; 2])>,
+        target_center: egui::Pos2,
+        ctx: &egui::Context,
+    ) {
+        if images.is_empty() {
+            return;
+        }
+        let gap = 24.0;
+        let total_width: f32 = images.iter().map(|(_, sz)| sz[0]).sum::<f32>()
+            + gap * (images.len().saturating_sub(1) as f32);
+
+        let start_x = target_center.x - (total_width / 2.0);
+        let start_y = target_center.y;
+
+        self.clear_selection();
+        let mut x_offset = 0.0;
+        for (compressed_bytes, size) in images {
+            let pos = egui::pos2(start_x + x_offset, start_y - (size[1] / 2.0));
+            let idx = self.canvas.add_image(pos, compressed_bytes, size, ctx);
+            self.selected_shape_indices.insert(idx);
+            self.primary_selected = Some(idx);
+            x_offset += size[0] + gap;
+        }
+        self.is_dirty = true;
+        self.tool = Tool::Select;
+    }
+}
+
+/// Process a single file (PDF or Image) into a list of scaled image byte pairs.
+fn process_file_to_images(path: &std::path::Path) -> Vec<(Vec<u8>, [f32; 2])> {
+    let mut out = Vec::new();
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_lowercase());
+
+    if ext.as_deref() == Some("pdf") {
+        if let Ok(pdf_bytes) = std::fs::read(path) {
+            if let Ok(page_images) = render_pdf_to_images(&pdf_bytes) {
+                for page_bytes in page_images {
+                    if let Ok(img) = image::load_from_memory(&page_bytes) {
+                        if let Ok(res) = App::compress_and_scale(img) {
+                            out.push(res);
+                        }
+                    }
+                }
+            }
+        }
+    } else if let Ok(bytes) = std::fs::read(path) {
+        if let Ok(img) = image::load_from_memory(&bytes) {
+            if let Ok(res) = App::compress_and_scale(img) {
+                out.push(res);
+            }
+        }
+    }
+    out
+}
+
+/// Render pages of a PDF into individual PNG image bytes.
+fn render_pdf_to_images(pdf_bytes: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    let temp_dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let pdf_path = temp_dir.path().join("doc.pdf");
+    std::fs::write(&pdf_path, pdf_bytes).map_err(|e| e.to_string())?;
+
+    let output_prefix = temp_dir.path().join("page");
+
+    // 1. Try pdftoppm (fast, renders all pages as page-1.png, page-2.png, ...)
+    let pdftoppm_res = std::process::Command::new("pdftoppm")
+        .arg("-png")
+        .arg("-r")
+        .arg("150")
+        .arg(&pdf_path)
+        .arg(&output_prefix)
+        .output();
+
+    let mut png_paths: Vec<std::path::PathBuf> = Vec::new();
+
+    if let Ok(res) = pdftoppm_res {
+        if res.status.success() {
+            if let Ok(entries) = std::fs::read_dir(temp_dir.path()) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.extension().and_then(|s| s.to_str()) == Some("png") {
+                        png_paths.push(p);
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Fallback: qlmanage on macOS if pdftoppm failed or is absent
+    if png_paths.is_empty() {
+        let _ = std::process::Command::new("qlmanage")
+            .arg("-t")
+            .arg("-s")
+            .arg("1200")
+            .arg("-o")
+            .arg(temp_dir.path())
+            .arg(&pdf_path)
+            .output();
+
+        if let Ok(entries) = std::fs::read_dir(temp_dir.path()) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.extension().and_then(|s| s.to_str()) == Some("png") {
+                    png_paths.push(p);
+                }
+            }
+        }
+    }
+
+    if png_paths.is_empty() {
+        return Err("Could not render PDF pages".into());
+    }
+
+    // Sort page paths numerically (page-1.png, page-2.png, ... page-10.png)
+    png_paths.sort_by(|a, b| {
+        let num_a = extract_trailing_number(a.file_stem().and_then(|s| s.to_str()).unwrap_or(""));
+        let num_b = extract_trailing_number(b.file_stem().and_then(|s| s.to_str()).unwrap_or(""));
+        num_a.cmp(&num_b)
+    });
+
+    let mut images = Vec::new();
+    for path in png_paths {
+        if let Ok(bytes) = std::fs::read(&path) {
+            images.push(bytes);
+        }
+    }
+
+    if images.is_empty() {
+        Err("No page images extracted".into())
+    } else {
+        Ok(images)
+    }
+}
+
+fn extract_trailing_number(s: &str) -> usize {
+    let digits: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
+    digits.parse().unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3351,6 +3470,13 @@ mod tests {
         app.check_and_spawn_title_preview_for_shape(idx, &ctx);
         assert_eq!(app.canvas.shapes[idx].data.link_url(), Some("https://wikipedia.org"));
         assert!(app.canvas.shapes[idx].data.link_title().unwrap().contains("wikipedia.org"));
+    }
+
+    #[test]
+    fn test_extract_trailing_number() {
+        assert_eq!(extract_trailing_number("page-1"), 1);
+        assert_eq!(extract_trailing_number("page-2"), 2);
+        assert_eq!(extract_trailing_number("page-10"), 10);
     }
 }
 
