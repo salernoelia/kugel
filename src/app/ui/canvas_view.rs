@@ -701,11 +701,33 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
                                 }
                             } else if app.is_dragging_shape {
                                 let to_raw = delta - app.snap_correction;
+
+                                // Collect shapes dragged along as section members
+                                // (must be done before we move anything, so membership
+                                //  is tested against the section's current position)
+                                let mut extra_indices: Vec<usize> = Vec::new();
+                                for &idx in &app.selected_shape_indices {
+                                    if idx < app.canvas.shapes.len()
+                                        && matches!(
+                                            app.canvas.shapes[idx].data,
+                                            ShapeData::SectionBox { .. }
+                                        )
+                                    {
+                                        extra_indices.extend(app.section_member_indices(idx));
+                                    }
+                                }
+
                                 for &idx in &app.selected_shape_indices {
                                     if idx < app.canvas.shapes.len() {
                                         app.canvas.shapes[idx].data.translate(to_raw);
                                     }
                                 }
+                                for idx in &extra_indices {
+                                    if *idx < app.canvas.shapes.len() {
+                                        app.canvas.shapes[*idx].data.translate(to_raw);
+                                    }
+                                }
+
                                 let mut correction = egui::Vec2::ZERO;
                                 if let Some(p) = app.primary_selected {
                                     if p < app.canvas.shapes.len() {
@@ -722,8 +744,14 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
                                             app.canvas.shapes[idx].data.translate(correction);
                                         }
                                     }
+                                    for idx in &extra_indices {
+                                        if *idx < app.canvas.shapes.len() {
+                                            app.canvas.shapes[*idx].data.translate(correction);
+                                        }
+                                    }
                                 }
                                 app.snap_correction = correction;
+
                             }
                         }
 

@@ -180,6 +180,31 @@ impl App {
         None
     }
 
+    /// Returns indices of all shapes that are inside or partially inside the given
+    /// SectionBox, excluding the section itself and any already-selected shapes.
+    pub fn section_member_indices(&self, section_idx: usize) -> Vec<usize> {
+        let section_rect = match &self.canvas.shapes[section_idx].data {
+            ShapeData::SectionBox { rect, .. } => *rect,
+            _ => return vec![],
+        };
+        self.canvas
+            .shapes
+            .iter()
+            .enumerate()
+            .filter(|(idx, shape)| {
+                if *idx == section_idx || self.selected_shape_indices.contains(idx) {
+                    return false;
+                }
+                if matches!(shape.data, ShapeData::SectionBox { .. }) {
+                    return false;
+                }
+                let bounds = shape.data.get_bounds();
+                bounds.is_positive() && section_rect.intersects(bounds)
+            })
+            .map(|(idx, _)| idx)
+            .collect()
+    }
+
     pub fn get_handle_under_mouse(&self, shape_idx: usize, mouse_pos: egui::Pos2) -> Option<usize> {
         let shape = &self.canvas.shapes[shape_idx];
         let bounds = shape.data.get_bounds();
