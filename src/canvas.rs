@@ -41,6 +41,16 @@ impl Canvas {
                 ));
                 None
             }
+            Tool::FilledRectangle => {
+                self.current_shape = Some(Shape::new_rect(
+                    self.next_id,
+                    egui::Rect::from_two_pos(pos, pos),
+                    color,
+                    width,
+                    true,
+                ));
+                None
+            }
             Tool::Circle => {
                 self.current_shape = Some(Shape::new_circle(
                     self.next_id,
@@ -49,6 +59,17 @@ impl Canvas {
                     color,
                     width,
                     filled,
+                ));
+                None
+            }
+            Tool::FilledCircle => {
+                self.current_shape = Some(Shape::new_circle(
+                    self.next_id,
+                    pos,
+                    0.0,
+                    color,
+                    width,
+                    true,
                 ));
                 None
             }
@@ -190,17 +211,36 @@ impl Canvas {
 
     pub fn render(&self, painter: &egui::Painter, zoom: f32, pan_offset: egui::Vec2, editing_index: Option<usize>) {
         let clip = painter.clip_rect();
-        for (idx, shape) in self.shapes.iter().enumerate() {
+
+        let screen_bounds_for = |shape: &Shape| -> egui::Rect {
             let bounds = shape.data.get_bounds();
-            if bounds.is_positive() {
-                let screen_bounds = egui::Rect::from_min_max(
-                    egui::pos2(bounds.min.x * zoom + pan_offset.x, bounds.min.y * zoom + pan_offset.y),
-                    egui::pos2(bounds.max.x * zoom + pan_offset.x, bounds.max.y * zoom + pan_offset.y),
-                )
-                .expand(64.0);
-                if !clip.intersects(screen_bounds) {
-                    continue;
-                }
+            egui::Rect::from_min_max(
+                egui::pos2(bounds.min.x * zoom + pan_offset.x, bounds.min.y * zoom + pan_offset.y),
+                egui::pos2(bounds.max.x * zoom + pan_offset.x, bounds.max.y * zoom + pan_offset.y),
+            )
+            .expand(64.0)
+        };
+
+        // First pass: sections always render behind everything else
+        for shape in self.shapes.iter() {
+            if !matches!(shape.data, ShapeData::SectionBox { .. }) {
+                continue;
+            }
+            let bounds = shape.data.get_bounds();
+            if bounds.is_positive() && !clip.intersects(screen_bounds_for(shape)) {
+                continue;
+            }
+            shape.data.render(painter, zoom, pan_offset, false);
+        }
+
+        // Second pass: everything else
+        for (idx, shape) in self.shapes.iter().enumerate() {
+            if matches!(shape.data, ShapeData::SectionBox { .. }) {
+                continue;
+            }
+            let bounds = shape.data.get_bounds();
+            if bounds.is_positive() && !clip.intersects(screen_bounds_for(shape)) {
+                continue;
             }
             let is_editing = Some(idx) == editing_index;
             shape.data.render(painter, zoom, pan_offset, is_editing);

@@ -12,7 +12,9 @@ pub struct Icons {
     pub pen: IconPair,
     pub line: IconPair,
     pub rectangle: IconPair,
+    pub rectangle_outlined: IconPair,
     pub circle: IconPair,
+    pub circle_outlined: IconPair,
     pub text: IconPair,
     pub note: IconPair,
     pub section: IconPair,
@@ -86,7 +88,15 @@ impl Icons {
                 "rectangle",
                 include_bytes!("../assets/icons/rectangle-horizontal.png"),
             ),
+            rectangle_outlined: load(
+                "rectangle_outlined",
+                include_bytes!("../assets/icons/square-square.png"),
+            ),
             circle: load("circle", include_bytes!("../assets/icons/circle.png")),
+            circle_outlined: load(
+                "circle_outlined",
+                include_bytes!("../assets/icons/circle-circle.png"),
+            ),
             text: load("text", include_bytes!("../assets/icons/text-initial.png")),
             note: load("note", include_bytes!("../assets/icons/sticky-note.png")),
             section: load(

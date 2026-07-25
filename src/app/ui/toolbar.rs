@@ -26,8 +26,10 @@ pub fn render_bottom_toolbar(
                             (Tool::Select, &icons.select, "Select (V)"),
                             (Tool::Pen, &icons.pen, "Pen (P)"),
                             (Tool::Line, &icons.line, "Line (L)"),
-                            (Tool::Rectangle, &icons.rectangle, "Rectangle (R)"),
-                            (Tool::Circle, &icons.circle, "Circle (O)"),
+                            (Tool::FilledRectangle, &icons.rectangle, "Filled Rectangle (R)"),
+                            (Tool::Rectangle, &icons.rectangle_outlined, "Outlined Rectangle (Shift+R)"),
+                            (Tool::FilledCircle, &icons.circle, "Filled Circle (O)"),
+                            (Tool::Circle, &icons.circle_outlined, "Outlined Circle (Shift+O)"),
                             (Tool::Text, &icons.text, "Text (T)"),
                             (Tool::StickyNote, &icons.note, "Sticky Note (N)"),
                             (Tool::Section, &icons.section, "Section (F)"),
@@ -49,8 +51,22 @@ pub fn render_bottom_toolbar(
                         }
 
                         if compact_toolbar {
+                            ui.separator();
+                            if icons
+                                .icon_button(ui, &icons.save, "Save Board (Cmd+S)")
+                                .clicked()
+                            {
+                                app.save();
+                            }
+                            if icons
+                                .icon_button(ui, &icons.export, "Export Board (Cmd+E)")
+                                .clicked()
+                            {
+                                app.show_export_dialog = true;
+                            }
                             return;
                         }
+
 
                         ui.separator();
 
@@ -99,8 +115,6 @@ pub fn render_bottom_toolbar(
                         if app.recoloring_selection && ui.input(|i| i.pointer.any_released()) {
                             app.recoloring_selection = false;
                         }
-
-                        ui.checkbox(&mut app.filled_shapes, "Fill");
 
                         ui.separator();
 

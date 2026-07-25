@@ -30,6 +30,7 @@ pub fn render_inline_text_editor(app: &mut App, ctx: &egui::Context) {
 
             egui::Area::new(egui::Id::new("inline_text_edit"))
                 .fixed_pos(screen_pos)
+                .constrain(false)
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
                     let font_id = egui::FontId::proportional(text_size * app.zoom);

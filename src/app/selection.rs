@@ -158,7 +158,21 @@ impl App {
 
     pub fn hit_test(&self, canvas_pos: egui::Pos2) -> Option<usize> {
         let tolerance = 5.0;
+        // First pass: non-section shapes (topmost first)
         for (idx, shape) in self.canvas.shapes.iter().enumerate().rev() {
+            if matches!(shape.data, ShapeData::SectionBox { .. }) {
+                continue;
+            }
+            if shape.data.contains_point(canvas_pos, tolerance) {
+                return Some(idx);
+            }
+        }
+        // Second pass: sections as fallback — clicking empty space inside a
+        // section selects it, but shapes on top take priority
+        for (idx, shape) in self.canvas.shapes.iter().enumerate().rev() {
+            if !matches!(shape.data, ShapeData::SectionBox { .. }) {
+                continue;
+            }
             if shape.data.contains_point(canvas_pos, tolerance) {
                 return Some(idx);
             }

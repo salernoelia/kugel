@@ -121,6 +121,16 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
                             && !i.modifiers.command
                             && !i.modifiers.ctrl
                             && !i.modifiers.alt
+                            && !i.modifiers.shift
+                    })
+                };
+                let shift_key = |ui: &egui::Ui, key: egui::Key| -> bool {
+                    ui.input(|i| {
+                        i.key_pressed(key)
+                            && i.modifiers.shift
+                            && !i.modifiers.command
+                            && !i.modifiers.ctrl
+                            && !i.modifiers.alt
                     })
                 };
 
@@ -137,10 +147,18 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
                     app.clear_selection();
                 }
                 if bare_key(ui, egui::Key::R) {
+                    app.tool = Tool::FilledRectangle;
+                    app.clear_selection();
+                }
+                if shift_key(ui, egui::Key::R) {
                     app.tool = Tool::Rectangle;
                     app.clear_selection();
                 }
                 if bare_key(ui, egui::Key::O) {
+                    app.tool = Tool::FilledCircle;
+                    app.clear_selection();
+                }
+                if shift_key(ui, egui::Key::O) {
                     app.tool = Tool::Circle;
                     app.clear_selection();
                 }

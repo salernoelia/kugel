@@ -207,6 +207,7 @@ impl ShapeData {
         }
     }
 
+
     pub fn link_url(&self) -> Option<&str> {
         match self {
             ShapeData::Text { link_url, .. } | ShapeData::StickyNote { link_url, .. } => {
@@ -591,8 +592,7 @@ impl ShapeData {
                 rect.expand(tolerance).contains(point)
             }
             ShapeData::SectionBox { rect, .. } => {
-                let band = tolerance.max(4.0);
-                rect.expand(band).contains(point) && !rect.shrink(band).contains(point)
+                rect.expand(tolerance).contains(point)
             }
         }
     }
@@ -747,6 +747,13 @@ impl ShapeData {
                 let start = transform(rect.min);
                 let end = transform(rect.max);
                 let transformed_rect = egui::Rect::from_two_pos(start, end);
+                let fill = egui::Color32::from_rgba_unmultiplied(
+                    color.r(),
+                    color.g(),
+                    color.b(),
+                    18,
+                );
+                painter.rect_filled(transformed_rect, 4.0 * zoom, fill);
                 painter.rect_stroke(
                     transformed_rect,
                     4.0 * zoom,
