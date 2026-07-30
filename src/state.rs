@@ -1,7 +1,7 @@
 use crate::shapes::Shape;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct CanvasState {
     pub version: String,
     pub shapes: Vec<Shape>,

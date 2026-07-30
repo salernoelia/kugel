@@ -6,11 +6,16 @@ pub mod ui;
 
 use crate::canvas::Canvas;
 use crate::icons::Icons;
+use crate::net::client::{NetworkClient, SyncStatus};
+use crate::net::kugelsh::{KugelCloudPointer, LocalRoomCache};
+use crate::net::protocol::{ClientMessage, RemoteUser, ServerMessage};
+use crate::app::ui::dashboard::DashboardModal;
+use crate::app::ui::presence::RemoteCursorState;
 use crate::shapes::{Shape, Tool};
 use crate::updater::{spawn_update_check, UiEvent, UpdateState};
 use eframe::egui;
 use font::setup_custom_fonts;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Instant;
@@ -25,6 +30,17 @@ pub struct App {
     pub pan_offset: egui::Vec2,
     pub use_grid: bool,
     pub background_color: egui::Color32,
+
+    // Real-Time Collaboration & Sync state
+    pub net_client: Option<NetworkClient>,
+    pub my_user_id: Option<String>,
+    pub remote_cursors: HashMap<String, RemoteCursorState>,
+    pub remote_users: Vec<RemoteUser>,
+    pub locked_shapes: HashMap<usize, String>,
+    pub dashboard: DashboardModal,
+    pub sync_status: SyncStatus,
+    pub last_cursor_send: Option<Instant>,
+    pub last_cursor_pos: Option<egui::Pos2>,
 
     // Selection/Transform state
     pub selected_shape_indices: HashSet<usize>,
@@ -90,6 +106,15 @@ impl Default for App {
             pan_offset: egui::Vec2::ZERO,
             use_grid: true,
             background_color: egui::Color32::from_rgb(20, 20, 23),
+            net_client: None,
+            my_user_id: None,
+            remote_cursors: HashMap::new(),
+            remote_users: Vec::new(),
+            locked_shapes: HashMap::new(),
+            dashboard: DashboardModal::default(),
+            sync_status: SyncStatus::Disconnected,
+            last_cursor_send: None,
+            last_cursor_pos: None,
             selected_shape_indices: HashSet::new(),
             primary_selected: None,
             is_resizing: None,
@@ -236,10 +261,253 @@ impl App {
                         if shape.data.link_url() == Some(&url) {
                             shape.data.set_link_title(Some(title));
                             self.is_dirty = true;
+                            self.broadcast_shape_update(shape_id);
                         }
                     }
                 }
             }
         }
+    }
+
+    pub fn poll_network_events(&mut self, ctx: &egui::Context) {
+        if let Some(net) = &self.net_client {
+            let messages = net.poll_messages();
+            let has_messages = !messages.is_empty();
+            for msg in messages {
+                match msg {
+                    ServerMessage::RoomState {
+                        shapes,
+                        users,
+                        locked_shapes,
+                        your_user_id,
+                        ..
+                    } => {
+                        self.my_user_id = Some(your_user_id);
+                        if !shapes.is_empty() {
+                            self.canvas.shapes = shapes;
+                            for shape in &mut self.canvas.shapes {
+                                shape.data.load_textures(ctx, shape.id);
+                            }
+                            self.canvas.next_id = self.canvas.shapes.iter().map(|s| s.id).max().unwrap_or(0) + 1;
+                        } else if !self.canvas.shapes.is_empty() {
+                            // Server room is empty, but client has local shapes. Push local shapes to server!
+                            let local_shapes = self.canvas.shapes.clone();
+                            for shape in &local_shapes {
+                                self.broadcast_shape_create(shape);
+                            }
+                        }
+                        self.remote_users = users;
+                        self.locked_shapes = locked_shapes;
+                        self.sync_status = SyncStatus::Live;
+                    }
+                    ServerMessage::UserJoined { user } => {
+                        self.remote_users.retain(|u| u.id != user.id);
+                        self.remote_users.push(user);
+                    }
+                    ServerMessage::UserLeft { user_id } => {
+                        self.remote_users.retain(|u| u.id != user_id);
+                        self.remote_cursors.remove(&user_id);
+                        self.locked_shapes.retain(|_, owner| owner != &user_id);
+                    }
+                    ServerMessage::RemoteCursor {
+                        user_id,
+                        x,
+                        y,
+                        selected_ids,
+                    } => {
+                        self.remote_cursors.insert(
+                            user_id.clone(),
+                            RemoteCursorState {
+                                user_id,
+                                pos: egui::pos2(x, y),
+                                selected_ids,
+                                last_update: Instant::now(),
+                            },
+                        );
+                    }
+                    ServerMessage::LockGranted { shape_id, user_id } => {
+                        self.locked_shapes.insert(shape_id, user_id);
+                    }
+                    ServerMessage::LockDenied { shape_id, owner_id } => {
+                        self.notification = Some((
+                            format!("Shape {shape_id} is locked by user {owner_id}"),
+                            Instant::now(),
+                        ));
+                    }
+                    ServerMessage::LockReleased { shape_id } => {
+                        self.locked_shapes.remove(&shape_id);
+                    }
+                    ServerMessage::ShapeUpdated {
+                        shape_id, data, ..
+                    } => {
+                        if let Some(shape) = self.canvas.shapes.iter_mut().find(|s| s.id == shape_id) {
+                            shape.data = data;
+                            shape.data.load_textures(ctx, shape.id);
+                        }
+                    }
+                    ServerMessage::ShapeCreated { shape, .. } => {
+                        let mut new_shape = shape;
+                        new_shape.data.load_textures(ctx, new_shape.id);
+                        self.canvas.next_id = self.canvas.next_id.max(new_shape.id + 1);
+                        if !self.canvas.shapes.iter().any(|s| s.id == new_shape.id) {
+                            self.canvas.shapes.push(new_shape);
+                        }
+                    }
+                    ServerMessage::ShapesDeleted { shape_ids, .. } => {
+                        self.canvas.shapes.retain(|s| !shape_ids.contains(&s.id));
+                        self.selected_shape_indices.retain(|id| !shape_ids.contains(id));
+                    }
+                    ServerMessage::ShapesReordered { shape_ids, action, .. } => {
+                        use crate::net::protocol::ZOrderAction;
+                        match action {
+                            ZOrderAction::BringToFront => {
+                                let mut moved = Vec::new();
+                                self.canvas.shapes.retain(|s| {
+                                    if shape_ids.contains(&s.id) {
+                                        moved.push(s.clone());
+                                        false
+                                    } else {
+                                        true
+                                    }
+                                });
+                                self.canvas.shapes.extend(moved);
+                            }
+                            ZOrderAction::SendToBack => {
+                                let mut moved = Vec::new();
+                                self.canvas.shapes.retain(|s| {
+                                    if shape_ids.contains(&s.id) {
+                                        moved.push(s.clone());
+                                        false
+                                    } else {
+                                        true
+                                    }
+                                });
+                                moved.extend(self.canvas.shapes.clone());
+                                self.canvas.shapes = moved;
+                            }
+                            ZOrderAction::BringForward => {
+                                for i in (0..self.canvas.shapes.len().saturating_sub(1)).rev() {
+                                    if shape_ids.contains(&self.canvas.shapes[i].id) {
+                                        self.canvas.shapes.swap(i, i + 1);
+                                    }
+                                }
+                            }
+                            ZOrderAction::SendBackward => {
+                                for i in 1..self.canvas.shapes.len() {
+                                    if shape_ids.contains(&self.canvas.shapes[i].id) {
+                                        self.canvas.shapes.swap(i, i - 1);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    ServerMessage::Error { message } => {
+                        self.notification = Some((format!("Sync Error: {message}"), Instant::now()));
+                    }
+                    _ => {}
+                }
+            }
+
+            if has_messages {
+                ctx.request_repaint();
+            }
+
+            self.remote_cursors.retain(|_, state| state.last_update.elapsed().as_secs() < 5);
+
+            // Save live edits to local internal cache (~/.local/share/kugel/cache/<room_id>.json)
+            if let Some(path) = &self.current_file_path {
+                if KugelCloudPointer::is_kugelsh_path(path) {
+                    let state = crate::state::CanvasState {
+                        version: "1.0".to_string(),
+                        shapes: self.canvas.shapes.clone(),
+                        background_color: [
+                            self.background_color.r(),
+                            self.background_color.g(),
+                            self.background_color.b(),
+                            self.background_color.a(),
+                        ],
+                        zoom: self.zoom,
+                        pan_offset: [self.pan_offset.x, self.pan_offset.y],
+                        next_id: self.canvas.next_id,
+                        dark_mode: self.dark_mode,
+                    };
+                    let _ = LocalRoomCache::save_cache(&net.room_id, &state);
+                }
+            }
+        }
+    }
+
+    pub fn broadcast_shape_create(&self, shape: &Shape) {
+        if let Some(net) = &self.net_client {
+            net.send(ClientMessage::CreateShape {
+                shape: shape.clone(),
+            });
+        }
+    }
+
+    pub fn broadcast_shape_update(&self, shape_id: usize) {
+        if let Some(net) = &self.net_client {
+            if let Some(shape) = self.canvas.shapes.iter().find(|s| s.id == shape_id) {
+                net.send(ClientMessage::UpdateShape {
+                    shape_id,
+                    data: shape.data.clone(),
+                });
+            }
+        }
+    }
+
+    pub fn broadcast_delete_shapes(&self, shape_ids: &[usize]) {
+        if let Some(net) = &self.net_client {
+            net.send(ClientMessage::DeleteShapes {
+                shape_ids: shape_ids.to_vec(),
+            });
+        }
+    }
+
+    pub fn broadcast_reorder_shapes(&self, shape_ids: &[usize], action: crate::net::protocol::ZOrderAction) {
+        if let Some(net) = &self.net_client {
+            net.send(ClientMessage::ReorderShapes {
+                shape_ids: shape_ids.to_vec(),
+                action,
+            });
+        }
+    }
+
+    pub fn sync_canvas_diff(&self, old_shapes: &[crate::shapes::Shape]) {
+        let old_map: std::collections::HashMap<usize, &crate::shapes::Shape> =
+            old_shapes.iter().map(|s| (s.id, s)).collect();
+        let new_map: std::collections::HashMap<usize, &crate::shapes::Shape> =
+            self.canvas.shapes.iter().map(|s| (s.id, s)).collect();
+
+        let deleted_ids: Vec<usize> = old_shapes
+            .iter()
+            .filter(|s| !new_map.contains_key(&s.id))
+            .map(|s| s.id)
+            .collect();
+        if !deleted_ids.is_empty() {
+            self.broadcast_delete_shapes(&deleted_ids);
+        }
+
+        for shape in &self.canvas.shapes {
+            if let Some(old_shape) = old_map.get(&shape.id) {
+                if old_shape.data != shape.data {
+                    self.broadcast_shape_update(shape.id);
+                }
+            } else {
+                self.broadcast_shape_create(shape);
+            }
+        }
+    }
+
+    pub fn leave_room(&mut self) {
+        if let Some(net) = &self.net_client {
+            net.send(ClientMessage::LeaveRoom);
+        }
+        self.net_client = None;
+        self.remote_cursors.clear();
+        self.remote_users.clear();
+        self.locked_shapes.clear();
+        self.sync_status = SyncStatus::Disconnected;
+        self.notification = Some(("Disconnected from room".to_string(), Instant::now()));
     }
 }

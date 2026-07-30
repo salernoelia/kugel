@@ -1,24 +1,11 @@
-mod app;
-mod canvas;
-mod export;
-mod icons;
-mod image_utils;
-#[cfg(target_os = "macos")]
-mod macos_open;
-mod markdown;
-mod shapes;
-mod state;
-mod updater;
-mod url_utils;
-
-use app::App;
+use kugel::app::App;
 use eframe::egui;
 
 fn main() -> eframe::Result<()> {
     // Register for the .kugel open-documents Apple Event before the event loop
     // starts, so a double-click that cold-launches the app is not dropped.
     #[cfg(target_os = "macos")]
-    macos_open::register();
+    kugel::macos_open::register();
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

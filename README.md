@@ -21,14 +21,33 @@ A fast, minimalist mood board for the desktop. Drop images, render PDF pages, sk
 - Dark and light themes that match system settings automatically
 - Automatic update checker and in-app updater
 
-## Install
-
-Requires a recent Rust toolchain.
+## Development & Build
 
 ```bash
-git clone https://github.com/salernoelia/kugel
-cd kugel
-cargo bundle --release
+# Run desktop application
+cargo run
+
+# Run collaboration server locally
+cargo run --bin kugel-server
+
+# Run test suite
+cargo test
+
+# Build release desktop binary
+cargo build --release --bin kugel
+```
+
+## Server Docker Deployment
+
+To run the collaboration server via Docker:
+
+```bash
+# Using Docker Compose
+docker-compose up -d
+
+# Or build and run directly with Docker
+docker build -t kugel-server .
+docker run -d -p 8765:8765 -v kugel_data:/app/data kugel-server
 ```
 
 ## Controls

@@ -22,6 +22,10 @@ pub fn render_top_left_controls(
                 .show(ui, |ui| {
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
+                            if ui.button("🏠 Home").clicked() {
+                                app.dashboard.show = true;
+                            }
+
                             if icons
                                 .icon_button(
                                     ui,

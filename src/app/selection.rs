@@ -39,10 +39,10 @@ impl App {
         for idx in indices {
             if idx < self.canvas.shapes.len() {
                 let mut dup = self.canvas.shapes[idx].clone();
-                dup.id = self.canvas.next_id;
-                self.canvas.next_id += 1;
+                dup.id = self.canvas.generate_id();
                 dup.data.load_textures(ctx, dup.id);
-                self.canvas.shapes.push(dup);
+                self.canvas.shapes.push(dup.clone());
+                self.broadcast_shape_create(&dup);
                 let new_idx = self.canvas.shapes.len() - 1;
                 self.selected_shape_indices.insert(new_idx);
                 self.primary_selected = Some(new_idx);
@@ -323,6 +323,13 @@ impl App {
 
             let new_bounds = self.canvas.shapes[idx].data.get_bounds();
             next_x = new_bounds.max.x + gap;
+        }
+
+        // Broadcast updated positions to other clients in cloud sessions
+        for &idx in &sorted_indices {
+            if idx < self.canvas.shapes.len() {
+                self.broadcast_shape_update(self.canvas.shapes[idx].id);
+            }
         }
 
         self.is_dirty = true;

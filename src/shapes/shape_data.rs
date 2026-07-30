@@ -9,6 +9,21 @@ pub struct Shape {
     pub data: ShapeData,
 }
 
+impl std::fmt::Debug for Shape {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Shape")
+            .field("id", &self.id)
+            .field("data", &self.data)
+            .finish()
+    }
+}
+
+impl PartialEq for Shape {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.data == other.data
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ShapeData {
     Pen {
@@ -78,6 +93,37 @@ pub enum ShapeData {
         rect: egui::Rect,
         color: egui::Color32,
     },
+}
+
+impl std::fmt::Debug for ShapeData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ShapeData::Pen { points, color, stroke_width } => f.debug_struct("Pen").field("points", points).field("color", color).field("stroke_width", stroke_width).finish(),
+            ShapeData::Line { start, end, color, stroke_width } => f.debug_struct("Line").field("start", start).field("end", end).field("color", color).field("stroke_width", stroke_width).finish(),
+            ShapeData::Rectangle { rect, color, stroke_width, filled } => f.debug_struct("Rectangle").field("rect", rect).field("color", color).field("stroke_width", stroke_width).field("filled", filled).finish(),
+            ShapeData::Circle { center, radius, color, stroke_width, filled } => f.debug_struct("Circle").field("center", center).field("radius", radius).field("color", color).field("stroke_width", stroke_width).field("filled", filled).finish(),
+            ShapeData::Text { pos, text, color, size, max_width, link_title, link_url, cached_size, cache_key } => f.debug_struct("Text").field("pos", pos).field("text", text).field("color", color).field("size", size).field("max_width", max_width).field("link_title", link_title).field("link_url", link_url).field("cached_size", cached_size).field("cache_key", cache_key).finish(),
+            ShapeData::Image { rect, bytes, original_size, texture: _ } => f.debug_struct("Image").field("rect", rect).field("bytes_len", &bytes.len()).field("original_size", original_size).finish(),
+            ShapeData::StickyNote { rect, text, bg_color, text_color, text_size, link_title, link_url, cached_height, cache_key } => f.debug_struct("StickyNote").field("rect", rect).field("text", text).field("bg_color", bg_color).field("text_color", text_color).field("text_size", text_size).field("link_title", link_title).field("link_url", link_url).field("cached_height", cached_height).field("cache_key", cache_key).finish(),
+            ShapeData::SectionBox { rect, color } => f.debug_struct("SectionBox").field("rect", rect).field("color", color).finish(),
+        }
+    }
+}
+
+impl PartialEq for ShapeData {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ShapeData::Pen { points: p1, color: c1, stroke_width: s1 }, ShapeData::Pen { points: p2, color: c2, stroke_width: s2 }) => p1 == p2 && c1 == c2 && s1 == s2,
+            (ShapeData::Line { start: s1, end: e1, color: c1, stroke_width: w1 }, ShapeData::Line { start: s2, end: e2, color: c2, stroke_width: w2 }) => s1 == s2 && e1 == e2 && c1 == c2 && w1 == w2,
+            (ShapeData::Rectangle { rect: r1, color: c1, stroke_width: w1, filled: f1 }, ShapeData::Rectangle { rect: r2, color: c2, stroke_width: w2, filled: f2 }) => r1 == r2 && c1 == c2 && w1 == w2 && f1 == f2,
+            (ShapeData::Circle { center: c1, radius: r1, color: col1, stroke_width: w1, filled: f1 }, ShapeData::Circle { center: c2, radius: r2, color: col2, stroke_width: w2, filled: f2 }) => c1 == c2 && r1 == r2 && col1 == col2 && w1 == w2 && f1 == f2,
+            (ShapeData::Text { pos: p1, text: t1, color: c1, size: s1, max_width: m1, link_title: lt1, link_url: lu1, .. }, ShapeData::Text { pos: p2, text: t2, color: c2, size: s2, max_width: m2, link_title: lt2, link_url: lu2, .. }) => p1 == p2 && t1 == t2 && c1 == c2 && s1 == s2 && m1 == m2 && lt1 == lt2 && lu1 == lu2,
+            (ShapeData::Image { rect: r1, bytes: b1, original_size: o1, .. }, ShapeData::Image { rect: r2, bytes: b2, original_size: o2, .. }) => r1 == r2 && b1 == b2 && o1 == o2,
+            (ShapeData::StickyNote { rect: r1, text: t1, bg_color: bg1, text_color: tc1, text_size: ts1, link_title: lt1, link_url: lu1, .. }, ShapeData::StickyNote { rect: r2, text: t2, bg_color: bg2, text_color: tc2, text_size: ts2, link_title: lt2, link_url: lu2, .. }) => r1 == r2 && t1 == t2 && bg1 == bg2 && tc1 == tc2 && ts1 == ts2 && lt1 == lt2 && lu1 == lu2,
+            (ShapeData::SectionBox { rect: r1, color: c1 }, ShapeData::SectionBox { rect: r2, color: c2 }) => r1 == r2 && c1 == c2,
+            _ => false,
+        }
+    }
 }
 
 impl Shape {
@@ -285,6 +331,16 @@ impl ShapeData {
             | ShapeData::SectionBox { color, .. } => *color = c,
             ShapeData::StickyNote { text_color, .. } => *text_color = c,
             ShapeData::Image { .. } => {}
+        }
+    }
+
+    pub fn set_stroke_width(&mut self, w: f32) {
+        match self {
+            ShapeData::Pen { stroke_width, .. }
+            | ShapeData::Line { stroke_width, .. }
+            | ShapeData::Rectangle { stroke_width, .. }
+            | ShapeData::Circle { stroke_width, .. } => *stroke_width = w,
+            _ => {}
         }
     }
 
@@ -592,7 +648,17 @@ impl ShapeData {
                 rect.expand(tolerance).contains(point)
             }
             ShapeData::SectionBox { rect, .. } => {
-                rect.expand(tolerance).contains(point)
+                let outer = rect.expand(tolerance);
+                if !outer.contains(point) {
+                    return false;
+                }
+                let margin = tolerance.max(8.0);
+                if rect.width() > margin * 2.0 && rect.height() > margin * 2.0 {
+                    let inner = rect.shrink(margin);
+                    !inner.contains(point)
+                } else {
+                    true
+                }
             }
         }
     }

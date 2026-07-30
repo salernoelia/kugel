@@ -181,13 +181,17 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
             }
 
             if has_shortcut(ui, egui::Key::Z, true) {
+                let old_shapes = app.canvas.shapes.clone();
                 app.canvas.undo();
+                app.sync_canvas_diff(&old_shapes);
                 app.clear_selection();
                 app.editing_text_index = None;
                 app.is_dirty = true;
             }
             if has_shortcut(ui, egui::Key::Y, true) {
+                let old_shapes = app.canvas.shapes.clone();
                 app.canvas.redo();
+                app.sync_canvas_diff(&old_shapes);
                 app.clear_selection();
                 app.editing_text_index = None;
                 app.is_dirty = true;
@@ -233,11 +237,11 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
 
                         let mut dup = app.canvas.shapes[idx].clone();
                         dup.data.translate(egui::vec2(20.0, 20.0));
-                        dup.id = app.canvas.next_id;
-                        app.canvas.next_id += 1;
+                        dup.id = app.canvas.generate_id();
                         dup.data.load_textures(ctx, dup.id);
 
-                        app.canvas.shapes.push(dup);
+                        app.canvas.shapes.push(dup.clone());
+                        app.broadcast_shape_create(&dup);
                         app.select_single(app.canvas.shapes.len() - 1);
                         app.notification = Some((
                             "Duplicated selection".to_string(),
@@ -271,10 +275,15 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
                     let mut indices: Vec<usize> =
                         app.selected_shape_indices.iter().copied().collect();
                     indices.sort_unstable_by(|a, b| b.cmp(a));
+                    let mut deleted_ids = Vec::new();
                     for idx in indices {
                         if idx < app.canvas.shapes.len() {
+                            deleted_ids.push(app.canvas.shapes[idx].id);
                             app.canvas.shapes.remove(idx);
                         }
+                    }
+                    if !deleted_ids.is_empty() {
+                        app.broadcast_delete_shapes(&deleted_ids);
                     }
                     app.clear_selection();
                     app.notification =
@@ -308,6 +317,7 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
                     for &idx in &app.selected_shape_indices {
                         if idx < app.canvas.shapes.len() {
                             app.canvas.shapes[idx].data.translate(nudge_delta);
+                            app.broadcast_shape_update(app.canvas.shapes[idx].id);
                         }
                     }
                 }
@@ -373,6 +383,9 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
                             if let ShapeData::Text { max_width, .. } = &mut shape.data {
                                 *max_width = Some(600.0);
                             }
+                        }
+                        if let Some(shape) = app.canvas.shapes.get(idx) {
+                            app.broadcast_shape_create(shape);
                         }
                         app.check_and_spawn_title_preview_for_shape(idx, ctx);
                         app.is_dirty = true;
@@ -484,37 +497,79 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
             if is_panning && response.dragged() {
                 app.pan_offset += response.drag_delta();
             } else if !is_panning {
-                if app.tool == Tool::Select && ui.input(|i| i.pointer.any_released()) {
-                    if let Some(start_canvas) = app.marquee_start {
-                        let latest_pos = ui.input(|i| i.pointer.latest_pos());
-                        let end_canvas = if let Some(p) = latest_pos {
-                            app.screen_to_canvas(p)
-                        } else {
-                            if let Some(pos) =
-                                response.hover_pos().or(response.interact_pointer_pos())
-                            {
-                                app.screen_to_canvas(pos)
-                            } else {
-                                start_canvas
+                if ui.input(|i| i.pointer.any_released()) || response.drag_stopped() {
+                    if app.canvas.current_shape.is_some() {
+                        if let Some(idx) = app.canvas.finish_shape() {
+                            if let Some(shape) = app.canvas.shapes.get(idx) {
+                                app.broadcast_shape_create(shape);
                             }
-                        };
+                            app.select_single(idx);
+                            app.tool = Tool::Select;
+                        }
+                        app.is_dirty = true;
+                    }
 
-                        let marquee_box = egui::Rect::from_two_pos(start_canvas, end_canvas);
-                        if marquee_box.width() > 2.0 && marquee_box.height() > 2.0 {
-                            app.clear_selection();
-                            for (idx, shape) in app.canvas.shapes.iter().enumerate() {
-                                let is_section = matches!(shape.data, ShapeData::SectionBox { .. });
-                                let shape_bounds = shape.data.get_bounds();
-                                let selected = if is_section {
-                                    marquee_box.contains_rect(shape_bounds)
+                    if app.tool == Tool::Select {
+                        if let Some(start_canvas) = app.marquee_start {
+                            let latest_pos = ui.input(|i| i.pointer.latest_pos());
+                            let end_canvas = if let Some(p) = latest_pos {
+                                app.screen_to_canvas(p)
+                            } else {
+                                if let Some(pos) =
+                                    response.hover_pos().or(response.interact_pointer_pos())
+                                {
+                                    app.screen_to_canvas(pos)
                                 } else {
-                                    marquee_box.intersects(shape_bounds)
-                                };
-                                if selected {
-                                    app.selected_shape_indices.insert(idx);
-                                    app.primary_selected = Some(idx);
+                                    start_canvas
+                                }
+                            };
+
+                            let marquee_box = egui::Rect::from_two_pos(start_canvas, end_canvas);
+                            if marquee_box.width() > 2.0 && marquee_box.height() > 2.0 {
+                                app.clear_selection();
+                                for (idx, shape) in app.canvas.shapes.iter().enumerate() {
+                                    let is_section = matches!(shape.data, ShapeData::SectionBox { .. });
+                                    let shape_bounds = shape.data.get_bounds();
+                                    let selected = if is_section {
+                                        marquee_box.contains_rect(shape_bounds)
+                                    } else {
+                                        marquee_box.intersects(shape_bounds)
+                                    };
+                                    if selected {
+                                        app.selected_shape_indices.insert(idx);
+                                        app.primary_selected = Some(idx);
+                                    }
                                 }
                             }
+                        }
+                    }
+                    if app.is_dragging_shape || app.is_resizing.is_some() {
+                        // Collect section member indices before broadcasting
+                        let mut extra_ids: Vec<usize> = Vec::new();
+                        if app.is_dragging_shape {
+                            for &idx in &app.selected_shape_indices {
+                                if idx < app.canvas.shapes.len()
+                                    && matches!(
+                                        app.canvas.shapes[idx].data,
+                                        ShapeData::SectionBox { .. }
+                                    )
+                                {
+                                    for mi in app.section_member_indices(idx) {
+                                        if mi < app.canvas.shapes.len() {
+                                            extra_ids.push(app.canvas.shapes[mi].id);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        for &idx in &app.selected_shape_indices {
+                            if idx < app.canvas.shapes.len() {
+                                app.broadcast_shape_update(app.canvas.shapes[idx].id);
+                            }
+                        }
+                        // Also broadcast member shapes that were moved with sections
+                        for shape_id in extra_ids {
+                            app.broadcast_shape_update(shape_id);
                         }
                     }
                     app.is_resizing = None;
@@ -838,6 +893,9 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
                                     app.request_text_focus = true;
                                     app.select_single(idx);
                                     app.tool = Tool::Select;
+                                    if let Some(shape) = app.canvas.shapes.get(idx) {
+                                        app.broadcast_shape_create(shape);
+                                    }
                                 }
                             }
                         } else if app.tool != Tool::Text
@@ -863,12 +921,17 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
                             app.canvas.update_current_shape(canvas_pos);
                         }
 
-                        if response.drag_stopped() {
-                            if let Some(idx) = app.canvas.finish_shape() {
-                                app.select_single(idx);
-                                app.tool = Tool::Select;
+                        if response.drag_stopped() || ui.input(|i| i.pointer.any_released()) {
+                            if app.canvas.current_shape.is_some() {
+                                if let Some(idx) = app.canvas.finish_shape() {
+                                    if let Some(shape) = app.canvas.shapes.get(idx) {
+                                        app.broadcast_shape_create(shape);
+                                    }
+                                    app.select_single(idx);
+                                    app.tool = Tool::Select;
+                                }
+                                app.is_dirty = true;
                             }
-                            app.is_dirty = true;
                         }
                     }
                 }
@@ -981,6 +1044,7 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
             }
 
             // Text dimensions caching & StickyNote auto-resizing
+            let mut resized_sticky_ids = Vec::new();
             for shape in &mut app.canvas.shapes {
                 match &mut shape.data {
                     ShapeData::Text {
@@ -1050,10 +1114,47 @@ pub fn render_central_canvas(app: &mut App, ctx: &egui::Context, is_dark: bool) 
                         if (rect.height() - required_height).abs() > 0.1 {
                             rect.max.y = rect.min.y + required_height;
                             app.is_dirty = true;
+                            resized_sticky_ids.push(shape.id);
                         }
                     }
                     _ => {}
                 }
             }
+            for id in resized_sticky_ids {
+                app.broadcast_shape_update(id);
+            }
+
+            // Broadcast local mouse cursor move to room (throttled to ~30Hz or >2px displacement)
+            if let Some(hover_pos) = response.hover_pos() {
+                if let Some(net) = &app.net_client {
+                    let canvas_pos = (hover_pos - app.pan_offset) / app.zoom;
+                    let should_send = match (app.last_cursor_send, app.last_cursor_pos) {
+                        (Some(time), Some(last_pos)) => {
+                            time.elapsed() >= std::time::Duration::from_millis(33)
+                                || last_pos.distance(canvas_pos) > 2.0
+                        }
+                        _ => true,
+                    };
+                    if should_send {
+                        app.last_cursor_send = Some(std::time::Instant::now());
+                        app.last_cursor_pos = Some(canvas_pos);
+                        let selected: Vec<usize> = app.selected_shape_indices.iter().cloned().collect();
+                        net.send(crate::net::protocol::ClientMessage::CursorMove {
+                            x: canvas_pos.x,
+                            y: canvas_pos.y,
+                            selected_ids: selected,
+                        });
+                    }
+                }
+            }
+
+            // Render remote participant cursors
+            crate::app::ui::presence::render_remote_cursors(
+                &painter,
+                &app.remote_cursors,
+                &app.remote_users,
+                app.zoom,
+                app.pan_offset,
+            );
         });
 }

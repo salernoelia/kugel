@@ -1,9 +1,12 @@
 pub mod canvas_view;
+pub mod dashboard;
 pub mod export_dialog;
+pub mod presence;
 pub mod text_editor;
 pub mod toast;
 pub mod toolbar;
 pub mod top_left;
+pub mod top_right;
 
 use crate::app::App;
 use crate::shapes::Tool;
@@ -13,6 +16,7 @@ use text_editor::render_inline_text_editor;
 use toast::render_toast_notification;
 use toolbar::render_bottom_toolbar;
 use top_left::render_top_left_controls;
+use top_right::render_top_right_collaboration_header;
 use eframe::egui;
 use std::time::Instant;
 
@@ -30,6 +34,27 @@ impl eframe::App for App {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.apply_ui_events();
+        self.poll_network_events(ctx);
+
+        if let Some(action) = self.dashboard.ui(ctx) {
+            match action {
+                dashboard::DashboardAction::NewLocalBoard => {
+                    self.new_board();
+                }
+                dashboard::DashboardAction::CreateCloudRoom => {
+                    self.create_cloud_room(ctx);
+                }
+                dashboard::DashboardAction::JoinRoom(room_id) => {
+                    self.join_cloud_room(&room_id, ctx);
+                }
+                dashboard::DashboardAction::OpenRecent(path) => {
+                    self.open_kugel_file(&path, ctx);
+                }
+                dashboard::DashboardAction::OpenFileDialog => {
+                    self.open_file_dialog(ctx);
+                }
+            }
+        }
 
         #[cfg(target_os = "macos")]
         for path in crate::macos_open::take_pending() {
@@ -105,11 +130,11 @@ impl eframe::App for App {
                 let target = self.paste_target_canvas(ctx);
                 let center = shape.data.get_bounds().center();
                 shape.data.translate(target - center);
-                shape.id = self.canvas.next_id;
-                self.canvas.next_id += 1;
+                shape.id = self.canvas.generate_id();
                 shape.data.load_textures(ctx, shape.id);
 
-                self.canvas.shapes.push(shape);
+                self.canvas.shapes.push(shape.clone());
+                self.broadcast_shape_create(&shape);
                 self.select_single(self.canvas.shapes.len() - 1);
                 self.tool = Tool::Select;
                 self.notification = Some(("Pasted shape".to_string(), Instant::now()));
@@ -172,6 +197,7 @@ impl eframe::App for App {
         }
 
         render_top_left_controls(self, ctx, &icons, panel_bg, panel_stroke, is_dark);
+        render_top_right_collaboration_header(self, ctx, is_dark);
         render_bottom_toolbar(self, ctx, &icons, panel_bg, panel_stroke, is_dark);
         render_central_canvas(self, ctx, is_dark);
         render_inline_text_editor(self, ctx);

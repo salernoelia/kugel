@@ -12,6 +12,21 @@ pub struct Canvas {
 }
 
 impl Canvas {
+    pub fn generate_id(&mut self) -> usize {
+        loop {
+            let id = (rand::random::<u32>() as usize) & 0x7FFF_FFFF;
+            if id != 0 && !self.shapes.iter().any(|s| s.id == id) {
+                if let Some(curr) = &self.current_shape {
+                    if curr.id == id {
+                        continue;
+                    }
+                }
+                self.next_id = self.next_id.max(id + 1);
+                return id;
+            }
+        }
+    }
+
     pub fn start_shape(
         &mut self,
         tool: Tool,
@@ -22,18 +37,19 @@ impl Canvas {
     ) -> Option<usize> {
         self.undo_history.clear();
         self.creation_start_pos = Some(pos);
+        let id = self.generate_id();
         match tool {
             Tool::Pen => {
-                self.current_shape = Some(Shape::new_pen(self.next_id, vec![pos], color, width));
+                self.current_shape = Some(Shape::new_pen(id, vec![pos], color, width));
                 None
             }
             Tool::Line => {
-                self.current_shape = Some(Shape::new_line(self.next_id, pos, pos, color, width));
+                self.current_shape = Some(Shape::new_line(id, pos, pos, color, width));
                 None
             }
             Tool::Rectangle => {
                 self.current_shape = Some(Shape::new_rect(
-                    self.next_id,
+                    id,
                     egui::Rect::from_two_pos(pos, pos),
                     color,
                     width,
@@ -43,7 +59,7 @@ impl Canvas {
             }
             Tool::FilledRectangle => {
                 self.current_shape = Some(Shape::new_rect(
-                    self.next_id,
+                    id,
                     egui::Rect::from_two_pos(pos, pos),
                     color,
                     width,
@@ -53,7 +69,7 @@ impl Canvas {
             }
             Tool::Circle => {
                 self.current_shape = Some(Shape::new_circle(
-                    self.next_id,
+                    id,
                     pos,
                     0.0,
                     color,
@@ -64,7 +80,7 @@ impl Canvas {
             }
             Tool::FilledCircle => {
                 self.current_shape = Some(Shape::new_circle(
-                    self.next_id,
+                    id,
                     pos,
                     0.0,
                     color,
@@ -75,7 +91,7 @@ impl Canvas {
             }
             Tool::Section => {
                 self.current_shape = Some(Shape::new_section(
-                    self.next_id,
+                    id,
                     egui::Rect::from_two_pos(pos, pos),
                     color,
                 ));
@@ -84,7 +100,7 @@ impl Canvas {
             Tool::Text => {
                 // Text is created instantly and placed in edit mode
                 let text_shape = Shape::new_text(
-                    self.next_id,
+                    id,
                     pos,
                     "".to_string(),
                     color,
@@ -93,14 +109,13 @@ impl Canvas {
                 self.history.push(self.shapes.clone());
                 self.shapes.push(text_shape);
                 let edit_index = self.shapes.len() - 1;
-                self.next_id += 1;
                 Some(edit_index)
             }
             Tool::StickyNote => {
                 // StickyNote is created instantly and placed in edit mode
                 let rect = egui::Rect::from_min_size(pos, egui::vec2(140.0, 140.0));
                 let sticky_shape = Shape::new_sticky_note(
-                    self.next_id,
+                    id,
                     rect,
                     "".to_string(),
                     egui::Color32::from_rgb(255, 243, 176), // Light yellow
@@ -110,7 +125,6 @@ impl Canvas {
                 self.history.push(self.shapes.clone());
                 self.shapes.push(sticky_shape);
                 let edit_index = self.shapes.len() - 1;
-                self.next_id += 1;
                 Some(edit_index)
             }
             Tool::Select => None,
@@ -167,7 +181,6 @@ impl Canvas {
             if keep {
                 self.history.push(self.shapes.clone());
                 self.shapes.push(shape);
-                self.next_id += 1;
                 return Some(self.shapes.len() - 1);
             }
         }
@@ -178,15 +191,15 @@ impl Canvas {
         self.history.push(self.shapes.clone());
         self.undo_history.clear();
 
+        let id = self.generate_id();
         let w = size[0];
         let h = size[1];
         let rect = egui::Rect::from_center_size(pos, egui::vec2(w, h));
-        let mut shape = Shape::new_image(self.next_id, rect, bytes, size, None);
-        shape.data.load_textures(ctx, self.next_id);
+        let mut shape = Shape::new_image(id, rect, bytes, size, None);
+        shape.data.load_textures(ctx, id);
 
         let added_idx = self.shapes.len();
         self.shapes.push(shape);
-        self.next_id += 1;
         added_idx
     }
 
@@ -194,10 +207,10 @@ impl Canvas {
         self.history.push(self.shapes.clone());
         self.undo_history.clear();
 
-        let shape = Shape::new_text(self.next_id, pos, text, color, 24.0);
+        let id = self.generate_id();
+        let shape = Shape::new_text(id, pos, text, color, 24.0);
         let added_idx = self.shapes.len();
         self.shapes.push(shape);
-        self.next_id += 1;
         added_idx
     }
 

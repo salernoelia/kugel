@@ -87,10 +87,23 @@ pub fn render_bottom_toolbar(
                         let size_image = egui::Image::new(paintbrush_tex)
                             .fit_to_exact_size(egui::vec2(18.0, 18.0));
                         ui.add(size_image).on_hover_text("Stroke Size");
-                        ui.add(
+                        let stroke_resp = ui.add(
                             egui::Slider::new(&mut app.stroke_width, 1.0..=20.0)
                                 .show_value(false),
                         );
+                        if stroke_resp.changed() && !app.selected_shape_indices.is_empty() {
+                            let mut updated_ids = Vec::new();
+                            for &idx in &app.selected_shape_indices {
+                                if let Some(shape) = app.canvas.shapes.get_mut(idx) {
+                                    shape.data.set_stroke_width(app.stroke_width);
+                                    updated_ids.push(shape.id);
+                                }
+                            }
+                            for id in updated_ids {
+                                app.broadcast_shape_update(id);
+                            }
+                            app.is_dirty = true;
+                        }
 
                         let color_resp = egui::color_picker::color_edit_button_srgba(
                             ui,
@@ -105,10 +118,15 @@ pub fn render_bottom_toolbar(
                                 app.canvas.undo_history.clear();
                                 app.recoloring_selection = true;
                             }
+                            let mut updated_ids = Vec::new();
                             for &idx in &app.selected_shape_indices {
                                 if let Some(shape) = app.canvas.shapes.get_mut(idx) {
                                     shape.data.set_color(app.selected_color);
+                                    updated_ids.push(shape.id);
                                 }
+                            }
+                            for id in updated_ids {
+                                app.broadcast_shape_update(id);
                             }
                             app.is_dirty = true;
                         }
@@ -119,13 +137,17 @@ pub fn render_bottom_toolbar(
                         ui.separator();
 
                         if icons.icon_button(ui, &icons.undo, "Undo (Cmd+Z)").clicked() {
+                            let old_shapes = app.canvas.shapes.clone();
                             app.canvas.undo();
+                            app.sync_canvas_diff(&old_shapes);
                             app.clear_selection();
                             app.editing_text_index = None;
                             app.is_dirty = true;
                         }
                         if icons.icon_button(ui, &icons.redo, "Redo (Cmd+Y)").clicked() {
+                            let old_shapes = app.canvas.shapes.clone();
                             app.canvas.redo();
+                            app.sync_canvas_diff(&old_shapes);
                             app.clear_selection();
                             app.editing_text_index = None;
                             app.is_dirty = true;
@@ -134,7 +156,9 @@ pub fn render_bottom_toolbar(
                             .icon_button(ui, &icons.clear, "Clear Canvas")
                             .clicked()
                         {
+                            let deleted_ids: Vec<usize> = app.canvas.shapes.iter().map(|s| s.id).collect();
                             app.canvas.clear();
+                            app.broadcast_delete_shapes(&deleted_ids);
                             app.clear_selection();
                             app.editing_text_index = None;
                             app.is_dirty = true;

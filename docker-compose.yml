@@ -1,0 +1,20 @@
+version: "3.8"
+
+services:
+  kugel-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kugel-server
+    ports:
+      - "8765:8765"
+    environment:
+      - PORT=8765
+      - HOST=0.0.0.0
+      - DATABASE_PATH=/app/data/kugel.db
+    volumes:
+      - kugel_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  kugel_data:

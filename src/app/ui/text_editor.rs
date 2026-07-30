@@ -95,17 +95,21 @@ pub fn render_inline_text_editor(app: &mut App, ctx: &egui::Context) {
 
                     if response.lost_focus() || pressed_esc || pressed_cmd_enter {
                         let is_empty = app.editing_text_buffer.trim().is_empty();
+                        let shape_id = app.canvas.shapes[idx].id;
                         match &mut app.canvas.shapes[idx].data {
                             ShapeData::Text { text, .. } => {
                                 if is_empty {
+                                    app.broadcast_delete_shapes(&[shape_id]);
                                     app.canvas.shapes.remove(idx);
                                     app.clear_selection();
                                 } else {
                                     *text = app.editing_text_buffer.clone();
+                                    app.broadcast_shape_update(shape_id);
                                 }
                             }
                             ShapeData::StickyNote { text, .. } => {
                                 *text = app.editing_text_buffer.clone();
+                                app.broadcast_shape_update(shape_id);
                             }
                             _ => {}
                         }

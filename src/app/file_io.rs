@@ -4,6 +4,9 @@ use crate::export::export_canvas_to_image;
 use crate::image_utils::{compress_and_scale, fit_display_size, process_file_to_images};
 use crate::markdown::{looks_like_markdown, strip_markdown};
 use crate::shapes::{ShapeData, Tool};
+use crate::net::client::{NetworkClient, SyncStatus};
+use crate::net::crypto::CredentialsStore;
+use crate::net::kugelsh::KugelCloudPointer;
 use crate::state::CanvasState;
 use eframe::egui;
 use std::path::Path;
@@ -11,8 +14,49 @@ use std::time::Instant;
 
 impl App {
     pub fn open_kugel_file(&mut self, path: &Path, ctx: &egui::Context) -> bool {
-        if let Ok(json) = std::fs::read_to_string(path) {
+        let is_cloud = KugelCloudPointer::is_kugelsh_path(path);
+
+        if is_cloud {
+            if let Ok(pointer) = KugelCloudPointer::read_from_file(path) {
+                let state = pointer.offline_snapshot;
+                self.canvas.shapes = state.shapes;
+                self.canvas.next_id = state.next_id;
+                self.background_color = egui::Color32::from_rgba_unmultiplied(
+                    state.background_color[0],
+                    state.background_color[1],
+                    state.background_color[2],
+                    state.background_color[3],
+                );
+                self.zoom = state.zoom;
+                self.pan_offset = egui::vec2(state.pan_offset[0], state.pan_offset[1]);
+                self.dark_mode = state.dark_mode;
+                self.canvas.load_textures(ctx);
+                self.clear_selection();
+                self.editing_text_index = None;
+                self.current_file_path = Some(path.to_path_buf());
+                self.is_dirty = false;
+
+                ensure_local_server_running();
+                let creds = CredentialsStore::load();
+                self.net_client = Some(NetworkClient::connect(
+                    pointer.sync.server_url,
+                    pointer.sync.room_id,
+                    creds.auth_token,
+                    ctx.clone(),
+                ));
+                self.sync_status = SyncStatus::Connecting;
+
+                self.dashboard.recents.add_recent(path, pointer.metadata.title.clone(), true);
+
+                self.notification = Some((
+                    format!("Opened cloud board: {}", pointer.metadata.title),
+                    Instant::now(),
+                ));
+                return true;
+            }
+        } else if let Ok(json) = std::fs::read_to_string(path) {
             if let Ok(state) = serde_json::from_str::<CanvasState>(&json) {
+                self.leave_room();
                 self.canvas.shapes = state.shapes;
                 self.canvas.next_id = state.next_id;
                 self.background_color = egui::Color32::from_rgba_unmultiplied(
@@ -30,6 +74,12 @@ impl App {
                 self.generate_missing_link_previews(ctx);
                 self.current_file_path = Some(path.to_path_buf());
                 self.is_dirty = false;
+                self.net_client = None;
+                self.sync_status = SyncStatus::Disconnected;
+
+                let title = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+                self.dashboard.recents.add_recent(path, title, false);
+
                 self.notification = Some((
                     format!(
                         "Opened board: {}",
@@ -70,6 +120,7 @@ impl App {
             }
         }
 
+        self.leave_room();
         self.canvas = Canvas::default();
         self.current_file_path = None;
         self.is_dirty = false;
@@ -95,27 +146,56 @@ impl App {
             next_id: self.canvas.next_id,
             dark_mode: self.dark_mode,
         };
-        if let Ok(json) = serde_json::to_string_pretty(&state) {
-            if std::fs::write(path, json).is_ok() {
+
+        if KugelCloudPointer::is_kugelsh_path(path) {
+            let title = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            let room_id = self
+                .net_client
+                .as_ref()
+                .map(|n| n.room_id.clone())
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            let server_url = self
+                .net_client
+                .as_ref()
+                .map(|n| n.server_url.clone())
+                .unwrap_or_else(|| "ws://127.0.0.1:8765".to_string());
+
+            let pointer = KugelCloudPointer::new(
+                room_id,
+                server_url,
+                "public_token".to_string(),
+                title,
+                state,
+            );
+
+            if pointer.save_atomic(path).is_ok() {
                 self.current_file_path = Some(path.to_path_buf());
                 self.is_dirty = false;
-                self.notification = Some((
-                    "Saved board state successfully".to_string(),
-                    Instant::now(),
-                ));
+                self.notification = Some(("Saved cloud board (.kugelsh)".to_string(), Instant::now()));
                 return true;
             }
+        } else {
+            // Atomic save for .kugel
+            let tmp_path = path.with_extension("kugel.tmp");
+            if let Ok(json) = serde_json::to_string_pretty(&state) {
+                if std::fs::write(&tmp_path, json).is_ok() {
+                    if std::fs::rename(&tmp_path, path).is_ok() {
+                        self.current_file_path = Some(path.to_path_buf());
+                        self.is_dirty = false;
+                        self.notification = Some(("Saved board state successfully".to_string(), Instant::now()));
+                        return true;
+                    }
+                }
+            }
         }
-        self.notification = Some((
-            "Saving board state failed".to_string(),
-            Instant::now(),
-        ));
+        self.notification = Some(("Saving board state failed".to_string(), Instant::now()));
         false
     }
 
     pub fn save_file_dialog(&mut self) -> bool {
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Kugel Mood Board", &["kugel"])
+            .add_filter("Kugel Cloud Board", &["kugelsh"])
             .save_file()
         {
             return self.save_to_path(&path);
@@ -123,9 +203,59 @@ impl App {
         false
     }
 
+    pub fn create_cloud_room(&mut self, ctx: &egui::Context) {
+        let server_url = crate::net::protocol::default_server_url();
+        if server_url.contains("127.0.0.1") || server_url.contains("localhost") {
+            ensure_local_server_running();
+        }
+        let room_id = uuid::Uuid::new_v4().to_string();
+        let creds = CredentialsStore::load();
+
+        self.net_client = Some(NetworkClient::connect(
+            server_url,
+            room_id.clone(),
+            creds.auth_token,
+            ctx.clone(),
+        ));
+        self.sync_status = SyncStatus::Connecting;
+
+        if let Some(path) = rfd::FileDialog::new()
+            .set_file_name("Cloud Board.kugelsh")
+            .add_filter("Kugel Cloud Shared Board", &["kugelsh"])
+            .save_file()
+        {
+            self.current_file_path = Some(path.clone());
+            self.save_to_path(&path);
+        }
+
+        // If local canvas already has shapes, broadcast them to server
+        for shape in self.canvas.shapes.clone() {
+            self.broadcast_shape_create(&shape);
+        }
+
+        self.notification = Some((format!("Created collaborative room: {}", &room_id[..8.min(room_id.len())]), Instant::now()));
+    }
+
+    pub fn join_cloud_room(&mut self, room_link_or_id: &str, ctx: &egui::Context) {
+        let (room_id, server_url) = crate::net::protocol::parse_room_link(room_link_or_id);
+        if server_url.contains("127.0.0.1") || server_url.contains("localhost") {
+            ensure_local_server_running();
+        }
+        let creds = CredentialsStore::load();
+
+        self.net_client = Some(NetworkClient::connect(
+            server_url,
+            room_id.clone(),
+            creds.auth_token,
+            ctx.clone(),
+        ));
+        self.sync_status = SyncStatus::Connecting;
+        self.notification = Some((format!("Joining room: {}", &room_id[..room_id.len().min(8)]), Instant::now()));
+    }
+
     pub fn open_file_dialog(&mut self, ctx: &egui::Context) {
         if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Kugel Mood Board", &["kugel"])
+            .add_filter("Kugel Mood Board", &["kugel", "kugelsh"])
             .pick_file()
         {
             if !self.open_kugel_file(&path, ctx) {
@@ -281,6 +411,9 @@ impl App {
                             *max_width = Some(600.0);
                         }
                     }
+                    if let Some(shape) = self.canvas.shapes.get(idx) {
+                        self.broadcast_shape_create(shape);
+                    }
                     self.check_and_spawn_title_preview_for_shape(idx, ctx);
                     self.is_dirty = true;
                     self.select_single(idx);
@@ -318,6 +451,9 @@ impl App {
                             let idx =
                                 self.canvas
                                     .add_image(center_canvas, compressed_bytes, size, ctx);
+                            if let Some(shape) = self.canvas.shapes.get(idx) {
+                                self.broadcast_shape_create(shape);
+                            }
                             self.is_dirty = true;
                             self.select_single(idx);
                             self.tool = Tool::Select;
@@ -374,6 +510,9 @@ impl App {
             if first_added.is_none() {
                 first_added = Some(idx);
             }
+            if let Some(shape) = self.canvas.shapes.get(idx) {
+                self.broadcast_shape_create(shape);
+            }
             x_offset += size[0] + gap;
         }
 
@@ -381,6 +520,18 @@ impl App {
         self.is_dirty = true;
         self.tool = Tool::Select;
         ctx.request_repaint();
+    }
+}
+
+pub fn ensure_local_server_running() {
+    use std::net::TcpStream;
+    use std::time::Duration;
+    if TcpStream::connect_timeout(&"127.0.0.1:8765".parse().unwrap(), Duration::from_millis(50)).is_err() {
+        if let Ok(server) = crate::server::KugelServer::new_in_memory() {
+            let addr: std::net::SocketAddr = "127.0.0.1:8765".parse().unwrap();
+            server.spawn_in_background(addr);
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 }
 
